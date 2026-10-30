@@ -2,7 +2,8 @@
 
 | 顺序 | 目录 | 测什么 | 通过标准 |
 |---|---|---|---|
-| 0 | — | 板子被电脑识别 | Arduino IDE 里能看到端口 |
+| 0 | `0_board_check/` | **板子验真**（是不是真的 N16R8） | 串口显示 Flash 16MB + PSRAM 8MB + 115KB OK |
+| 0.5 | — | 板子被电脑识别 | Arduino IDE 里能看到端口 |
 | 1 | `1_display/` | GC9A01 圆屏 | 屏上出现彩色圆环 + OK |
 | 2 | `2_mp3/` | DFPlayer 语音 | 串口 `DFPlayer OK`，每 3 秒一句 |
 | 3 | `3_net/` | Wi-Fi + 访问服务器 | 串口打印出 `DATE= / H=...` |
