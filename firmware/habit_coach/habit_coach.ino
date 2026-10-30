@@ -1,0 +1,889 @@
+/*
+ * 习惯伙伴 · 设备端固件（ESP32-S3 + GC9A01 圆屏 + DFPlayer + 两个按键）
+ * ---------------------------------------------------------------
+ * v2：习惯数量由家长页决定（1~4 件），设备通过 /api/state.txt 自动同步，
+ *     不需要再改代码；断网时用 NVS 里缓存的习惯继续工作。
+ *
+ * 设计原则：
+ *   1. 断网也能用 —— 打卡、星星、本周格子全部本地完成，联网只是同步。
+ *   2. 屏幕不显示中文（Arduino_GFX 默认只有 ASCII 字库）——5~10 岁本来就
+ *      识字少，所以：屏幕只画表情、星星、格子；所有"话"都由语音说出。
+ *   3. 语音全部来自 SD 卡上的预录音频（编号由服务器下发），延迟低、不花钱。
+ *   4. AI 不夸孩子，"爸妈的认可"由家长从手机发出来，设备只负责播出来。
+ *
+ * 依赖库：Arduino_GFX_Library (>=1.6.5)、DFRobotDFPlayerMini（可选）
+ * 开发板：ESP32S3 Dev Module / Flash 16MB / PSRAM: OPI PSRAM / Huge APP
+ *
+ * 按键：A=完成当前习惯  长按A=你教教我   B=切换习惯  长按B=立即同步
+ * 串口：t=试音 r=重置今天 s=立即同步 q=查看队列 h=打印习惯表
+ */
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
+#include <Arduino_GFX_Library.h>
+#include <esp_heap_caps.h>
+#if __has_include(<esp_arduino_version.h>)
+#include <esp_arduino_version.h>
+#endif
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+// 没有 secrets.h 时进入纯离线模式（也能玩）
+#define WIFI_SSID ""
+#define WIFI_PASS ""
+#define SERVER_HOST "192.168.1.10"
+#define SERVER_PORT 8099
+#endif
+
+// ======================= 功能开关 =======================
+#define USE_DFPLAYER   1   // 接了 DFPlayer Mini 就设 1；没接设 0（用蜂鸣器代替）
+#define USE_WIFI       1   // 设 0 则完全离线
+#define ENABLE_REMIND  1   // 定时语音提醒
+
+// ======================= 引脚（避开 USB 19/20、Flash 26~32、PSRAM 33~37）=====
+#define TFT_SCK   12
+#define TFT_MOSI  11
+#define TFT_CS     9
+#define TFT_DC    10
+#define TFT_RST   18
+#define TFT_BL     7
+
+#define BTN_A      4      // 完成
+#define BTN_B      5      // 切换
+#define BUZZER     6
+
+#define MP3_RX    16      // ESP32 接收 ← DFPlayer TX
+#define MP3_TX    17      // ESP32 发送 → DFPlayer RX（串 1k 电阻）
+
+// ======================= 习惯（由服务器下发，最多 4 件）=======================
+#define MAX_HABITS 4
+
+struct Habit {
+  String  id;         // 与服务器 habits.id 对应
+  bool    done;
+  uint8_t hh, mm;     // 提醒时间，0:0 表示不提醒
+  int     rt;         // 提醒语音编号（单句）
+  int     dt;         // 完成语音编号
+  int     rtSeq[4];    // 流程的引导语音序列（如 脏衣服→洗澡）
+  int     rtSeqMin[4]; // 每句在第几分钟播（出门流程 0/7/12）
+  int     rtSeqN;
+  int     minSec;      // >0：按下不立刻亮星，先倒计时这么多秒
+};
+
+Habit hab[MAX_HABITS];
+int   habCount = 0;
+bool  remindedToday[MAX_HABITS] = {false, false, false, false};
+int   selected = 0;
+
+// 问题卡模式：设备不解析中文，只把服务器画好的 240x240 RGB565 贴到屏上
+bool  cardMode = false;
+bool  cardPending = false;
+int   cardN = 0, cardIdx = 0;
+uint16_t *cardBuf = nullptr;
+
+// "按下 → 计时 → 才点亮"（防止随手按）
+int runIdx = -1;
+unsigned long runStart = 0, runDur = 0, lastBarMs = 0;
+
+// 流程引导语音的播放队列（一条流程 = 几句话，按"第几分钟"排期）
+int seqBuf[4];
+unsigned long seqAt[4];          // 每句话的绝对触发时间（millis）
+int seqN = 0, seqIdx = 0;
+
+// 语音编号（对应 SD 卡 mp3/xxxx.mp3）
+#define VOICE_BOOT        1
+#define VOICE_ALL_DONE    8
+#define VOICE_ONE_LEFT    9
+#define VOICE_TEACH_ME   11
+#define VOICE_THANKS     12
+#define VOICE_MSG_GENERIC 19
+
+// ======================= 调色板 =======================
+#define C_BG       0x0861   // 深夜蓝黑
+#define C_FACE     0xFE60   // 暖黄
+#define C_INK      0x18E3
+#define C_STAR_ON  0xFFE0
+#define C_STAR_OFF 0x2945
+#define C_TXT      0xC618
+#define C_ACCENT   0xFD20
+
+// ======================= 屏幕 =======================
+Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, GFX_NOT_DEFINED);
+Arduino_GFX *gfx = new Arduino_GC9A01(bus, TFT_RST, 0, true);
+Arduino_Canvas *canvas = nullptr;
+Arduino_GFX *ui = gfx;          // 统一切到这个指针上画
+bool canvasOk = false;
+
+// ======================= 语音 =======================
+#if USE_DFPLAYER
+#include <DFRobotDFPlayerMini.h>
+DFRobotDFPlayerMini mp3;
+bool mp3Ok = false;
+#endif
+
+// ======================= 状态 =======================
+Preferences prefs;
+bool weekDone[7] = {false, false, false, false, false, false, false};  // 近 7 天是否完成
+int  streak = 0;
+String todayKey = "";        // "2026-10-30"
+bool  wifiOk = false;
+unsigned long lastSync = 0, lastWifiTry = 0, lastBlink = 0, lastBannerClear = 0;
+bool needRedraw = true;
+int  expr = 0;               // 0 常态 1 开心 2 困 3 说话
+unsigned long exprUntil = 0;
+String banner = "";          // 屏幕上的一行提示（ASCII，给家长看）
+String queue = "";           // 离线打卡队列："brush@2026-10-30;"
+
+// 前置声明
+bool postCheckin(const String &habit);
+void say(int track);
+
+// ======================= 蜂鸣器 / 语音 =======================
+// 兼容 ESP32 Arduino core 2.x 与 3.x 的 LEDC API（不依赖 tone()）
+void buzzerInit() {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(BUZZER, 2000, 10);
+#else
+  ledcSetup(0, 2000, 10);
+  ledcAttachPin(BUZZER, 0);
+#endif
+}
+
+void beep(uint16_t freq, uint16_t ms) {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWriteTone(BUZZER, freq); delay(ms);
+  ledcWriteTone(BUZZER, 0);    ledcWrite(BUZZER, 0);
+#else
+  ledcWriteTone(0, freq); delay(ms);
+  ledcWriteTone(0, 0);    ledcWrite(0, 0);
+#endif
+}
+
+void say(int track) {
+#if USE_DFPLAYER
+  if (mp3Ok && track > 0) { mp3.play((uint16_t)track); return; }
+#endif
+  beep(1800, 70); delay(90); beep(2400, 70);   // 没有语音模块时的提示音
+  (void)track;
+}
+
+void happyFor(unsigned long ms = 2500)  { expr = 1; exprUntil = millis() + ms; needRedraw = true; }
+void talkFor(unsigned long ms = 2500)   { expr = 3; exprUntil = millis() + ms; needRedraw = true; }
+
+// 一条流程的语音按"第几分钟"排队：出门流程 0/7/12 分，洗澡 0/1 分
+void startSeq(int idx) {
+  unsigned long now = millis();
+  seqN = hab[idx].rtSeqN;
+  for (int i = 0; i < seqN && i < 4; i++) {
+    seqBuf[i] = hab[idx].rtSeq[i];
+    seqAt[i]  = now + (unsigned long)hab[idx].rtSeqMin[i] * 60000UL;
+  }
+  seqIdx = 0;
+}
+
+void cancelSeq() { seqN = 0; seqIdx = 0; }
+
+// ======================= 绘制 =======================
+void drawEyes(int mode) {
+  int lx = 88, rx = 152, ey = 92;
+  if (mode == 2) {                       // 闭眼
+    ui->drawLine(lx - 14, ey, lx + 14, ey, C_INK);
+    ui->drawLine(rx - 14, ey, rx + 14, ey, C_INK);
+    return;
+  }
+  if (mode == 1) {                       // 开心：^ ^
+    ui->drawLine(lx - 14, ey + 6, lx, ey - 8, C_INK);
+    ui->drawLine(lx, ey - 8, lx + 14, ey + 6, C_INK);
+    ui->drawLine(rx - 14, ey + 6, rx, ey - 8, C_INK);
+    ui->drawLine(rx, ey - 8, rx + 14, ey + 6, C_INK);
+    return;
+  }
+  ui->fillCircle(lx, ey, 12, C_INK);     // 圆眼 + 高光
+  ui->fillCircle(rx, ey, 12, C_INK);
+  ui->fillCircle(lx + 4, ey - 4, 4, C_FACE);
+  ui->fillCircle(rx + 4, ey - 4, 4, C_FACE);
+}
+
+void drawMouth(int mode) {
+  int cx = 120, my = 132;
+  if (mode == 1) { ui->fillCircle(cx, my, 20, C_INK); ui->fillCircle(cx, my - 8, 20, C_FACE); return; }
+  if (mode == 3) { ui->fillCircle(cx, my + 2, 8, C_INK); return; }
+  ui->drawLine(cx - 16, my, cx - 6, my + 7, C_INK);
+  ui->drawLine(cx - 6, my + 7, cx + 6, my + 7, C_INK);
+  ui->drawLine(cx + 6, my + 7, cx + 16, my, C_INK);
+}
+
+void drawStar(int cx, int cy, int r, bool filled, bool sel) {
+  int px[10], py[10];
+  for (int i = 0; i < 10; i++) {
+    float a = -PI / 2 + i * PI / 5.0f;
+    float rr = (i % 2 == 0) ? r : r * 0.45f;
+    px[i] = cx + cos(a) * rr;
+    py[i] = cy + sin(a) * rr;
+  }
+  for (int i = 0; i < 10; i++) {
+    int j = (i + 1) % 10;
+    ui->drawLine(px[i], py[i], px[j], py[j], filled ? C_STAR_ON : C_STAR_OFF);
+  }
+  if (filled) for (int i = 0; i < 10; i++) ui->drawLine(cx, cy, px[i], py[i], C_STAR_ON);
+  if (sel) ui->drawCircle(cx, cy, r + 7, C_ACCENT);
+}
+
+void renderCard();   // 前置声明
+
+void render() {
+  if (cardMode) { renderCard(); return; }
+  ui->fillScreen(C_BG);
+
+  // 顶部：本周 7 个格子。5 岁半看不懂"连续 5 天"，但看得懂"格子填满"
+  int dw = 24, dx0 = 120 - 3 * dw;
+  for (int i = 0; i < 7; i++) {
+    int x = dx0 + i * dw;
+    if (weekDone[i]) ui->fillCircle(x, 34, 9, C_STAR_ON);
+    else             ui->drawCircle(x, 34, 9, C_STAR_OFF);
+  }
+  ui->fillCircle(24, 34, 4, wifiOk ? 0x07E0 : 0x4208);   // 联网状态点
+
+  // 表情
+  drawEyes(expr);
+  drawMouth(expr);
+
+  // 今天要做的事：星星数量跟着家长页变（1~4 颗）
+  if (habCount > 0) {
+    int gap = (habCount > 1) ? (200 / habCount) : 0;
+    int startX = 120 - (habCount - 1) * gap / 2;
+    int r = (habCount <= 2) ? 23 : (habCount == 3 ? 19 : 16);
+    for (int i = 0; i < habCount; i++) {
+      drawStar(startX + i * gap, 178, r, hab[i].done, (i == selected));
+    }
+  } else {
+    ui->setTextColor(C_TXT);
+    ui->setTextSize(2);
+    ui->setCursor(46, 172);
+    ui->print("SYNCING");
+  }
+
+  // 计时进行中：底部一条进度条（孩子看得懂"还没满"）
+  if (runIdx >= 0 && runDur > 0) {
+    int w = 160, x0 = 40, yb = 205;
+    ui->drawRect(x0, yb, w, 10, C_STAR_OFF);
+    unsigned long e = millis() - runStart;
+    int f = (int)((e >= runDur) ? w - 2 : (e * (unsigned long)(w - 2)) / runDur);
+    if (f > 0) ui->fillRect(x0 + 1, yb + 1, f, 8, C_STAR_ON);
+  }
+
+  if (banner.length()) {
+    ui->setTextSize(1);
+    ui->setTextColor(C_ACCENT);
+    ui->setCursor(14, 222);
+    ui->print(banner);
+  }
+
+  if (canvasOk) canvas->flush();
+  needRedraw = false;
+}
+
+// ---------- 问题卡 ----------
+bool fetchCard(int idx) {
+  if (!wifiOk) return false;
+  if (!cardBuf) {
+    const size_t need = 240 * 240 * 2;   // 115200 字节，优先放 PSRAM
+    cardBuf = (uint16_t *)heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!cardBuf) cardBuf = (uint16_t *)heap_caps_malloc(need, MALLOC_CAP_8BIT);
+    if (!cardBuf) { setBanner("NO MEM", 3000); return false; }
+  }
+  HTTPClient http;
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
+               "/api/card.rgb565?i=" + String(idx);
+  http.begin(url);
+  http.setTimeout(6000);
+  int code = http.GET();
+  if (code != 200) { http.end(); return false; }
+  int len = http.getSize();
+  if (len != 240 * 240 * 2) { http.end(); return false; }
+  WiFiClient *st = http.getStreamPtr();
+  uint8_t *p = (uint8_t *)cardBuf;
+  int got = 0;
+  unsigned long t0 = millis();
+  while (got < len && millis() - t0 < 5000) {
+    int n = st->read(p + got, len - got);
+    if (n > 0) got += n; else delay(1);
+  }
+  http.end();
+  return got == len;
+}
+
+void renderCard() {
+  if (!cardBuf) { cardMode = false; needRedraw = true; return; }
+  if (canvasOk) {
+    memcpy(canvas->getFramebuffer(), cardBuf, 240 * 240 * 2);
+    canvas->flush();
+  } else {
+    gfx->draw16bitRGBBitmap(0, 0, cardBuf, 240, 240);
+  }
+  needRedraw = false;
+}
+
+void enterCard(int idx) {
+  if (cardN <= 0) return;
+  cardIdx = (idx < 0) ? 0 : idx;
+  if (fetchCard(cardIdx)) {
+    cardMode = true;
+    needRedraw = true;
+    Serial.printf("[card] page %d/%d\n", cardIdx + 1, cardN);
+  } else {
+    setBanner("CARD FAIL", 2500);
+  }
+}
+
+void setBanner(const String &s, unsigned long ms = 4000) {
+  banner = s;
+  lastBannerClear = millis() + ms;
+  needRedraw = true;
+}
+
+// ======================= 习惯表 =======================
+int findHabit(const String &id) {
+  for (int i = 0; i < habCount; i++) if (hab[i].id == id) return i;
+  return -1;
+}
+
+int ensureHabit(const String &id) {
+  int i = findHabit(id);
+  if (i >= 0) return i;
+  if (habCount >= MAX_HABITS) return -1;
+  hab[habCount].id = id;
+  hab[habCount].done = false;
+  hab[habCount].hh = 0;
+  hab[habCount].mm = 0;
+  hab[habCount].rt = 0;
+  hab[habCount].dt = 0;
+  hab[habCount].rtSeqN = 0;
+  hab[habCount].minSec = 0;
+  for (int k = 0; k < 4; k++) { hab[habCount].rtSeq[k] = 0; hab[habCount].rtSeqMin[k] = 0; }
+  return habCount++;
+}
+
+void seedDefaults() {
+  // 从没联过网时的兜底（和服务器默认的 2 件一致）
+  int i = ensureHabit("brush");
+  if (i >= 0) { hab[i].hh = 20; hab[i].mm = 30; hab[i].rt = 2; hab[i].dt = 3; }
+  i = ensureHabit("toys");
+  if (i >= 0) { hab[i].hh = 19; hab[i].mm = 30; hab[i].rt = 4; hab[i].dt = 5; }
+}
+
+// 习惯表存 NVS：id,rt,dt,hh,mm;id,rt,dt,hh,mm;
+void saveHabits() {
+  String s = "";
+  for (int i = 0; i < habCount; i++) {
+    s += hab[i].id + "," + String(hab[i].rt) + "," + String(hab[i].dt) + ","
+       + String(hab[i].hh) + "," + String(hab[i].mm) + ";";
+  }
+  prefs.putString("habits", s);
+}
+
+void loadHabits() {
+  String s = prefs.getString("habits", "");
+  habCount = 0;
+  int pos = 0;
+  while (pos < (int)s.length() && habCount < MAX_HABITS) {
+    int sep = s.indexOf(';', pos);
+    if (sep < 0) break;
+    String item = s.substring(pos, sep);
+    pos = sep + 1;
+    int c1 = item.indexOf(',');
+    int c2 = item.indexOf(',', c1 + 1);
+    int c3 = item.indexOf(',', c2 + 1);
+    int c4 = item.indexOf(',', c3 + 1);
+    if (c1 < 0 || c2 < 0 || c3 < 0 || c4 < 0) continue;
+    hab[habCount].id   = item.substring(0, c1);
+    hab[habCount].rt   = item.substring(c1 + 1, c2).toInt();
+    hab[habCount].dt   = item.substring(c2 + 1, c3).toInt();
+    hab[habCount].hh   = item.substring(c3 + 1, c4).toInt();
+    hab[habCount].mm   = item.substring(c4 + 1).toInt();
+    hab[habCount].done = false;
+    habCount++;
+  }
+  if (habCount == 0) seedDefaults();
+}
+
+bool allDone() {
+  if (habCount == 0) return false;
+  for (int i = 0; i < habCount; i++) if (!hab[i].done) return false;
+  return true;
+}
+
+int doneCount() {
+  int n = 0;
+  for (int i = 0; i < habCount; i++) if (hab[i].done) n++;
+  return n;
+}
+
+// ======================= 日期 / NVS =======================
+String dateKey() {
+  struct tm t;
+  if (getLocalTime(&t, 50)) {
+    char buf[16];
+    strftime(buf, sizeof(buf), "%Y-%m-%d", &t);
+    return String(buf);
+  }
+  return todayKey;   // 没网没时间时沿用上次
+}
+
+void loadState() {
+  prefs.begin("coach", false);
+  todayKey = prefs.getString("day", "");
+  streak = prefs.getInt("streak", 0);
+  queue = prefs.getString("queue", "");
+  int mask = prefs.getInt("done", 0);
+  loadHabits();
+  for (int i = 0; i < habCount; i++) hab[i].done = (mask >> i) & 1;
+}
+
+void saveState() {
+  int mask = 0;
+  for (int i = 0; i < MAX_HABITS; i++) if (i < habCount && hab[i].done) mask |= (1 << i);
+  prefs.putString("day", todayKey);
+  prefs.putInt("done", mask);
+  prefs.putInt("streak", streak);
+  prefs.putString("queue", queue);
+}
+
+// 跨天：清空今天的进度，连续天数结算
+void rollDayIfNeeded() {
+  String d = dateKey();
+  if (d.length() && d != todayKey) {
+    if (todayKey.length()) streak = allDone() ? streak + 1 : 0;
+    else streak = 0;
+    todayKey = d;
+    for (int i = 0; i < MAX_HABITS; i++) { hab[i].done = false; remindedToday[i] = false; }
+    selected = 0;
+    runIdx = -1;
+    saveState();
+    needRedraw = true;
+    Serial.printf("[day] %s streak=%d habits=%d\n", todayKey.c_str(), streak, habCount);
+  }
+}
+
+// ======================= 网络 =======================
+void queueCheckin(int idx) {
+  if (idx < 0 || idx >= habCount) return;
+  queue += hab[idx].id + "@" + todayKey + ";";
+  saveState();
+}
+
+bool postCheckin(const String &habit) {
+  if (!wifiOk) return false;
+  HTTPClient http;
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
+               "/api/checkin.txt?habit=" + habit;
+  http.begin(url);
+  http.setTimeout(2500);
+  int code = http.POST("");
+  bool ok = (code == 200 || code == 409);   // 409 = 今天已打过
+  http.end();
+  return ok;
+}
+
+void flushQueue() {
+  if (!wifiOk || !queue.length()) return;
+  while (queue.length()) {
+    int sep = queue.indexOf(';');
+    if (sep < 0) { queue = ""; break; }
+    String item = queue.substring(0, sep);
+    String habit = item.substring(0, item.indexOf('@'));
+    if (postCheckin(habit)) { queue = queue.substring(sep + 1); saveState(); }
+    else break;   // 网络还不稳，下次再试
+  }
+}
+
+void postAck(int id) {
+  if (!wifiOk) return;
+  HTTPClient http;
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
+               "/api/ack.txt?id=" + String(id);
+  http.begin(url);
+  http.setTimeout(2500);
+  http.POST("");
+  http.end();
+}
+
+// 把 "1,2,0,1,1,0,0" 解析进 weekDone[]
+void parseWeek(const String &v) {
+  String s = v;
+  for (int i = 0; i < 7; i++) {
+    int c = s.indexOf(',');
+    weekDone[i] = ((c < 0 ? s : s.substring(0, c)).toInt() == 1);
+    if (c < 0) break;
+    s = s.substring(c + 1);
+  }
+}
+
+// 解析 H=id|名字|是否完成|完成时间|提醒语音|完成语音|提醒时|提醒分
+void parseHabitLine(const String &line) {
+  String f[11];                             // 10 个字段：id..语音序列..最短秒数
+  int n = 0, pos = 2;                       // 跳过 "H="
+  while (n < 11 && pos <= (int)line.length()) {
+    int p = line.indexOf('|', pos);
+    if (p < 0) { f[n++] = line.substring(pos); break; }
+    f[n++] = line.substring(pos, p);
+    pos = p + 1;
+  }
+  if (n < 3) return;
+  int idx = ensureHabit(f[0]);
+  if (idx < 0) return;
+  if (f[2].toInt() == 1) hab[idx].done = true;
+  if (n >= 8) {
+    hab[idx].rt = f[4].toInt();
+    hab[idx].dt = f[5].toInt();
+    hab[idx].hh = f[6].toInt();
+    hab[idx].mm = f[7].toInt();
+  }
+  if (n >= 9) {          // 第 9 字段："53@0,43@7,62@12"（语音@第几分钟）
+    hab[idx].rtSeqN = 0;
+    String seq = f[8];
+    while (seq.length() && hab[idx].rtSeqN < 4) {
+      int c = seq.indexOf(',');
+      String one = (c < 0) ? seq : seq.substring(0, c);
+      int at = one.indexOf('@');
+      int track = ((at < 0) ? one : one.substring(0, at)).toInt();
+      int minute = (at < 0) ? 0 : one.substring(at + 1).toInt();
+      if (track > 0) {
+        int k = hab[idx].rtSeqN++;
+        hab[idx].rtSeq[k] = track;
+        hab[idx].rtSeqMin[k] = minute;
+      }
+      if (c < 0) break;
+      seq = seq.substring(c + 1);
+    }
+  }
+  if (n >= 10) hab[idx].minSec = f[9].toInt();
+  needRedraw = true;
+}
+
+bool syncState() {
+  if (!wifiOk) return false;
+  HTTPClient http;
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/state.txt";
+  http.begin(url);
+  http.setTimeout(2500);
+  int code = http.GET();
+  if (code != 200) { http.end(); return false; }
+  String body = http.getString();
+  http.end();
+
+  int pos = 0;
+  while (pos < (int)body.length()) {
+    int nl = body.indexOf('\n', pos);
+    if (nl < 0) nl = body.length();
+    String line = body.substring(pos, nl);
+    pos = nl + 1;
+
+    if (line.startsWith("Q="))          cardN = line.substring(2).toInt();
+    else if (line.startsWith("WEEK="))  parseWeek(line.substring(5));
+    else if (line.startsWith("STREAK=")) streak = line.substring(7).toInt();
+    else if (line.startsWith("H="))      parseHabitLine(line);
+    else if (line.startsWith("MSG=")) {
+      // MSG=<id>|<track>|<who>   track 就是 SD 卡语音编号，直接播
+      int p1 = line.indexOf('|');
+      int p2 = line.indexOf('|', p1 + 1);
+      if (p1 > 0) {
+        int mid   = line.substring(4, p1).toInt();
+        int track = (p2 > 0) ? line.substring(p1 + 1, p2).toInt() : 0;
+        Serial.printf("[net] voice track=%d id=%d\n", track, mid);
+        setBanner("MESSAGE FROM FAMILY", 6000);
+        say(track > 0 ? track : VOICE_MSG_GENERIC);
+        happyFor(5000);
+        // 0064 = 问题卡；0101~0199 = 识字卡；0201~0299 = 复习卡（还记得这个字吗）
+        if (track == 64 || (track >= 101 && track <= 299)) cardPending = true;
+        postAck(mid);
+      }
+    }
+  }
+  if (cardPending && cardN > 0 && !cardMode) enterCard(0);
+  if (selected >= habCount) selected = 0;
+  saveHabits();
+  saveState();
+  return true;
+}
+
+void connectWifi() {
+#if USE_WIFI
+  if (!strlen(WIFI_SSID)) { Serial.println("[wifi] 未配置，离线运行"); return; }
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) delay(150);
+  wifiOk = (WiFi.status() == WL_CONNECTED);
+  Serial.printf("[wifi] %s ip=%s\n", wifiOk ? "ok" : "fail",
+                WiFi.localIP().toString().c_str());
+  if (wifiOk) {
+    configTime(8 * 3600, 0, "ntp.aliyun.com", "ntp1.aliyun.com");
+    setBanner("ONLINE", 2000);
+  }
+#endif
+}
+
+// ======================= 打卡 =======================
+void completeHabit(int idx) {
+  if (habCount == 0) { setBanner("NOT READY"); return; }
+  if (idx < 0 || idx >= habCount) return;
+
+  if (hab[idx].done) {
+    setBanner("ALREADY DONE");
+    say(VOICE_THANKS);
+    return;
+  }
+  hab[idx].done = true;
+  needRedraw = true;
+  happyFor(3000);
+  cancelSeq();                 // 提前做完了，后面几句就不再念了
+  runIdx = -1;                 // 清掉计时状态
+
+  // 本地先给反馈，再管网络（保证断网也不掉体验）
+  say(hab[idx].dt);
+
+  if (wifiOk) { if (!postCheckin(hab[idx].id)) queueCheckin(idx); }
+  else queueCheckin(idx);
+  saveState();
+
+  if (allDone()) {
+    delay(1200);
+    say(VOICE_ALL_DONE);
+    happyFor(6000);
+    setBanner("ALL DONE!", 6000);
+  } else if (doneCount() == habCount - 1) {
+    delay(1200);
+    say(VOICE_ONE_LEFT);
+  }
+
+  for (int k = 1; k <= habCount; k++) {
+    int n = (idx + k) % habCount;
+    if (!hab[n].done) { selected = n; break; }
+  }
+
+  // 立刻同步一次：把服务器刚自动排的"识字卡"取回来显示
+  if (wifiOk) syncState();
+
+  needRedraw = true;
+}
+
+// ======================= 按键 =======================
+struct Btn { uint8_t pin; bool last; unsigned long pressedAt; bool longFired; };
+Btn btnA = {BTN_A, HIGH, 0, false};
+Btn btnB = {BTN_B, HIGH, 0, false};
+
+int readBtn(Btn &b) {
+  bool cur = digitalRead(b.pin);
+  int ev = 0;
+  if (cur == LOW && b.last == HIGH) {                       // 按下
+    b.pressedAt = millis();
+    b.longFired = false;
+  } else if (cur == LOW && !b.longFired && millis() - b.pressedAt > 1500) {
+    b.longFired = true;
+    ev = 2;                                                 // 长按
+  } else if (cur == HIGH && b.last == LOW) {                // 抬起
+    if (!b.longFired && millis() - b.pressedAt > 30) ev = 1;
+  }
+  b.last = cur;
+  return ev;
+}
+
+// ======================= 定时提醒 =======================
+void checkReminders() {
+#if ENABLE_REMIND
+  if (!wifiOk) return;                     // 没网就没有准确时间
+  struct tm t;
+  if (!getLocalTime(&t, 10)) return;
+  for (int i = 0; i < habCount; i++) {
+    if (hab[i].done || remindedToday[i]) continue;
+    if (hab[i].hh == 0 && hab[i].mm == 0) continue;   // 0:0 = 不提醒
+    if (t.tm_hour == hab[i].hh && t.tm_min == hab[i].mm) {
+      remindedToday[i] = true;
+      selected = i;
+      needRedraw = true;
+      talkFor(5000);
+      if (hab[i].rtSeqN > 0) startSeq(i);   // 流程：一句话一句话说
+      else say(hab[i].rt);
+      Serial.printf("[remind] habit %d seq=%d\n", i, hab[i].rtSeqN);
+    }
+  }
+#endif
+}
+
+// ======================= 串口调试 =======================
+void handleSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == 't') { say(1); }
+    else if (c == 'r') {
+      for (int i = 0; i < MAX_HABITS; i++) { hab[i].done = false; remindedToday[i] = false; }
+      streak = 0; queue = ""; saveState(); needRedraw = true;
+      Serial.println("已重置今天");
+    }
+    else if (c == 's') { Serial.println(syncState() ? "同步成功" : "同步失败"); }
+    else if (c == 'q') { Serial.println("队列: " + queue); }
+    else if (c == 'c') { Serial.printf("cards=%d\n", cardN); enterCard(0); }
+    else if (c == 'h') {
+      Serial.printf("habCount=%d\n", habCount);
+      for (int i = 0; i < habCount; i++)
+        Serial.printf("  %s done=%d %02d:%02d rt=%d dt=%d\n",
+                      hab[i].id.c_str(), hab[i].done, hab[i].hh, hab[i].mm,
+                      hab[i].rt, hab[i].dt);
+    }
+    else if (c == '1') { say(1); } else if (c == '2') { say(2); }
+    else if (c == '3') { say(3); } else if (c == '8') { say(8); }
+  }
+}
+
+// ======================= setup / loop =======================
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  pinMode(BTN_A, INPUT_PULLUP);
+  pinMode(BTN_B, INPUT_PULLUP);
+  pinMode(BUZZER, OUTPUT);
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+  buzzerInit();
+
+  gfx->begin();
+  canvas = new Arduino_Canvas(240, 240, gfx);
+  canvasOk = canvas->begin();
+  ui = canvasOk ? (Arduino_GFX *)canvas : gfx;
+  Serial.printf("[ui] canvas %s\n", canvasOk ? "OK" : "FAIL(直接写屏)");
+
+  loadState();
+  rollDayIfNeeded();
+  render();
+
+#if USE_DFPLAYER
+  Serial1.begin(9600, SERIAL_8N1, MP3_RX, MP3_TX);
+  delay(1200);                       // DFPlayer 上电需要时间
+  mp3Ok = mp3.begin(Serial1);
+  if (mp3Ok) {
+    mp3.volume(22);
+    mp3.EQ(DFPLAYER_EQ_NORMAL);
+    Serial.println("[mp3] DFPlayer OK");
+  } else {
+    Serial.println("[mp3] 未找到，用蜂鸣器代替");
+  }
+#endif
+
+  connectWifi();
+  if (wifiOk) { syncState(); flushQueue(); }
+
+  say(VOICE_BOOT);
+  happyFor(2500);
+  render();
+}
+
+void loop() {
+  // 1. 跨天检查
+  static unsigned long lastDayCheck = 0;
+  if (millis() - lastDayCheck > 5000) { lastDayCheck = millis(); rollDayIfNeeded(); }
+
+  // 2. 按键
+  int a = readBtn(btnA);
+  int b = readBtn(btnB);
+
+  if (cardMode) {
+    if (a == 1) {                       // A：退出卡片
+      cardMode = false; cardPending = false;
+      needRedraw = true;
+    } else if (b == 1) {                // B：翻页
+      int n = cardIdx + 1;
+      if (n < cardN) { if (fetchCard(n)) { cardIdx = n; renderCard(); } }
+      else { cardMode = false; cardPending = false; needRedraw = true; }
+    }
+  } else {
+  if (b == 1 && habCount > 0) {
+    if (runIdx >= 0) { runIdx = -1; needRedraw = true; }
+    selected = (selected + 1) % habCount;
+    needRedraw = true;
+    beep(1200, 40);
+  }
+  if (a == 2) {                       // 长按 A：你教教我（角色示弱）
+    say(VOICE_TEACH_ME);
+    talkFor(4000);
+    setBanner("TEACH ME", 4000);
+  }
+  if (a == 1) {
+    if (runIdx >= 0) {                       // 计时中再按 = 取消
+      runIdx = -1;
+      beep(700, 90);
+      setBanner("CANCELLED", 1500);
+      needRedraw = true;
+    } else if (selected < habCount && !hab[selected].done && hab[selected].minSec > 0) {
+      // 有最短时长的习惯：先计时，时间到才亮星
+      runIdx = selected;
+      runStart = millis();
+      runDur = (unsigned long)hab[selected].minSec * 1000UL;
+      lastBarMs = 0;
+      say(17);                               // 0017「一、二、三，开始！」
+      talkFor(2500);
+      needRedraw = true;
+    } else {
+      completeHabit(selected);
+    }
+  }
+  if (b == 2) {                       // 长按 B：立即同步
+    syncState();
+    flushQueue();
+    setBanner("SYNCED", 2000);
+  }
+  }
+
+  // 3. 联网状态维护
+  if (millis() - lastWifiTry > 30000) {
+    lastWifiTry = millis();
+    if (!wifiOk && strlen(WIFI_SSID)) connectWifi();
+  }
+  if (wifiOk && millis() - lastSync > 15000) {
+    lastSync = millis();
+    syncState();
+    flushQueue();
+    needRedraw = true;
+  }
+
+  // 4. 提醒
+  checkReminders();
+
+  // 4.2 倒计时推进
+  if (runIdx >= 0) {
+    if (millis() - runStart >= runDur) {
+      int done = runIdx;
+      runIdx = -1;
+      completeHabit(done);                   // 时间到 → 这才算完成
+    } else if (millis() - lastBarMs > 200) {
+      lastBarMs = millis();
+      needRedraw = true;                     // 每 200ms 刷一次进度条
+    }
+  }
+
+  // 4.5 流程引导语音
+  if (seqIdx < seqN && millis() >= seqAt[seqIdx]) {
+    say(seqBuf[seqIdx]);
+    seqIdx++;
+  }
+
+  // 5. 表情回落 + 眨眼
+  if (exprUntil && millis() > exprUntil) { expr = 0; exprUntil = 0; needRedraw = true; }
+  if (banner.length() && millis() > lastBannerClear) { banner = ""; needRedraw = true; }
+  if (millis() - lastBlink > 4200) {
+    lastBlink = millis();
+    if (expr == 0) { expr = 2; exprUntil = millis() + 130; needRedraw = true; }
+  }
+
+  // 6. 串口
+  handleSerial();
+
+  // 7. 重绘
+  if (needRedraw) render();
+  delay(20);
+}

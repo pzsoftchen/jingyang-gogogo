@@ -1,0 +1,18 @@
+# ---- 本地数据：绝对不要提交 ----
+coach.db
+coach.db-shm
+coach.db-wal
+
+# ---- 密钥 / 本机配置 ----
+secrets.h
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- macOS ----
+.DS_Store
+
+# ---- 临时产物 ----
+*.log
+tmp.aiff
