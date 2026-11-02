@@ -317,6 +317,7 @@ python3 tools/gen_icons.py           # 改了 emoji 或加了新习惯
 | [docs/habit-system.md](docs/habit-system.md) | **第一层**：习惯科学（66 天、过程性表扬、为什么不做奖励） |
 | [docs/aesthetic-order.md](docs/aesthetic-order.md) | **第三层**：秩序与美——自驱力的来源 |
 | [docs/answer-experience.md](docs/answer-experience.md) | **答案的体验**：倾听=复述；悬念/任务/故事三种形态 |
+| [docs/question-capture.md](docs/question-capture.md) | **问题采集链路**（决策记录）：按住说话 → 家里 ASR → LLM → 家长审核 → 小豆豆的声音回答 |
 | [docs/self-consistency-review.md](docs/self-consistency-review.md) | **自洽审计**：原则 ↔ 实现的差距清单 + 修复记录 |
 | [docs/network-strategy.md](docs/network-strategy.md) | **联网策略**：云是增强不是依赖；四条红线、四个等级 |
 | [docs/product-review.md](docs/product-review.md) | 自我评审：模块叠加的问题、该砍什么、优先级 |
