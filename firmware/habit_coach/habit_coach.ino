@@ -38,6 +38,13 @@
 #include "secrets.h"
 #else
 // 没有 secrets.h 时进入纯离线模式（也能玩）
+#ifndef DEVICE_ID
+#define DEVICE_ID "poc"        // 每台设备唯一；上云后用于鉴权与多设备
+#endif
+#ifndef DEVICE_TOKEN
+#define DEVICE_TOKEN ""        // 服务器设了 DEVICE_TOKEN 环境变量时，这里要填一致
+#endif
+
 #define WIFI_SSID ""
 #define WIFI_PASS ""
 #define SERVER_HOST "192.168.1.10"
@@ -227,6 +234,8 @@ bool touchReady = false;
 Preferences prefs;
 bool weekDone[7] = {false, false, false, false, false, false, false};  // 近 7 天是否完成
 int  streak = 0;
+int  protoVer = 1;        // 服务器协议版本（V=2）
+String packVer = "";      // 服务器上的语音包版本（PACK=voice.1）
 String todayKey = "";        // "2026-10-30"
 bool  wifiOk = false;
 unsigned long lastSync = 0, lastWifiTry = 0, lastBlink = 0, lastBannerClear = 0;
@@ -239,6 +248,7 @@ String queue = "";           // 离线打卡队列："brush@2026-10-30;"
 // 前置声明
 bool postCheckin(const String &habit);
 void postPath(const String &path);
+String deviceQuery();
 void say(int track);
 
 // ======================= 音频 =======================
@@ -602,7 +612,8 @@ bool fetchCard(int idx) {
   }
   HTTPClient http;
   String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/api/card.rgb565?i=" + String(idx) + "&s=" + String(SCREEN_W);
+               "/api/card.rgb565?i=" + String(idx) + "&s=" + String(SCREEN_W) +
+               "&d=" + DEVICE_ID;
   http.begin(url);
   http.setTimeout(8000);
   int code = http.GET();
@@ -793,11 +804,19 @@ void postPath(const String &path) {
   http.end();
 }
 
+// 统一拼设备身份参数：d=设备号（&t=令牌，配了才带）
+String deviceQuery() {
+  String s = String("?d=") + DEVICE_ID;
+  String tk = String(DEVICE_TOKEN);
+  if (tk.length()) s += String("&t=") + tk;
+  return s;
+}
+
 bool postCheckin(const String &habit) {
   if (!wifiOk) return false;
   HTTPClient http;
   String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/api/checkin.txt?habit=" + habit;
+               "/api/checkin.txt?habit=" + habit + "&d=" + DEVICE_ID;
   http.begin(url);
   http.setTimeout(2500);
   int code = http.POST("");
@@ -885,7 +904,8 @@ void parseHabitLine(const String &line) {
 bool syncState() {
   if (!wifiOk) return false;
   HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/state.txt";
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/state.txt"
+               + deviceQuery();
   http.begin(url);
   http.setTimeout(2500);
   int code = http.GET();
@@ -900,7 +920,18 @@ bool syncState() {
     String line = body.substring(pos, nl);
     pos = nl + 1;
 
-    if (line.startsWith("Q="))          cardN = line.substring(2).toInt();
+    if (line.startsWith("V="))          protoVer = line.substring(2).toInt();
+    else if (line.startsWith("PACK=")) {
+      packVer = line.substring(5);
+      // 设备上记一份，将来 OTA 换语音包时据此判断要不要下载
+      String have = prefs.getString("pack", "");
+      if (have != packVer) {
+        Serial.printf("[pack] 服务器语音包 %s（本地 %s）\n",
+                      packVer.c_str(), have.length() ? have.c_str() : "未知");
+        prefs.putString("pack", packVer);
+      }
+    }
+    else if (line.startsWith("Q="))      cardN = line.substring(2).toInt();
     else if (line.startsWith("WEEK="))  parseWeek(line.substring(5));
     else if (line.startsWith("STREAK=")) streak = line.substring(7).toInt();
     else if (line.startsWith("H="))      parseHabitLine(line);

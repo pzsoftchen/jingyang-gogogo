@@ -322,7 +322,8 @@ class HttpTests(Base):
         code, body = self.get("/api/state.txt")
         self.assertEqual(code, 200)
         text = body.decode("utf-8")
-        self.assertTrue(text.startswith("DATE="))
+        # 协议第 1 行永远是版本号，第 2 行才是 DATE（"只追加不改动"约定）
+        self.assertTrue(text.startswith("V=2\nDATE="), text[:40])
         self.assertIn("END", text)
 
     def test_checkin_endpoint_and_conflict(self):
@@ -411,6 +412,58 @@ class HttpTests(Base):
         self.post("/parent/notes_seen")
         _c2, body2 = self.get("/")
         self.assertNotIn("有件事想跟你说", body2.decode("utf-8"))
+
+    def test_protocol_has_version_line(self):
+        """V= 必须是第一行：固件据此判断服务器能力。"""
+        code, body = self.get("/api/state.txt")
+        self.assertEqual(code, 200)
+        first = body.decode("utf-8").splitlines()[0]
+        self.assertEqual(first, "V=2")
+
+    def test_protocol_has_content_pack_line(self):
+        code, body = self.get("/api/state.txt")
+        text = body.decode("utf-8")
+        self.assertIn("PACK=voice.", text)
+        self.assertLess(text.index("PACK="), text.index("END"))
+
+    def test_unknown_protocol_lines_are_ignored(self):
+        """老固件遇到新字段要能忽略——这条保证'只追加不改动'的约定可验证。"""
+        text = server.state_as_text(self.conn)
+        known = ("V=", "DATE=", "CHILD=", "COACH=", "STREAK=", "DONE=", "Q=",
+                 "WEEK=", "H=", "MSG=", "PACK=", "END")
+        for line in text.splitlines():
+            if not line:
+                continue
+            self.assertTrue(line.startswith(known), "出现了未登记的协议行: %r" % line)
+
+    def test_device_registered_on_touch(self):
+        self.get("/api/state.txt?d=s3-test-1")
+        row = self.conn.execute("SELECT id FROM devices WHERE id='s3-test-1'").fetchone()
+        self.assertIsNotNone(row)
+
+    def test_checkin_records_device(self):
+        self.post("/api/checkin.txt?habit=brush&d=s3-abc")
+        row = self.conn.execute(
+            "SELECT device_id FROM checkins ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(row["device_id"], "s3-abc")
+
+    def test_token_enforced_when_configured(self):
+        os.environ["DEVICE_TOKEN"] = "s3cr3t"
+        try:
+            code, _ = self.get("/api/state.txt")
+            self.assertEqual(code, 401, "配了令牌就必须校验")
+            code2, _ = self.get("/api/state.txt?t=s3cr3t")
+            self.assertEqual(code2, 200)
+        finally:
+            os.environ.pop("DEVICE_TOKEN", None)
+
+    def test_parent_pages_never_need_token(self):
+        os.environ["DEVICE_TOKEN"] = "s3cr3t"
+        try:
+            code, _ = self.get("/")
+            self.assertEqual(code, 200, "家长页不能被设备令牌挡住")
+        finally:
+            os.environ.pop("DEVICE_TOKEN", None)
 
 
 if __name__ == "__main__":

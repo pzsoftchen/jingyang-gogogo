@@ -185,6 +185,19 @@ def init_db():
     conn = db()
     conn.executescript(
         """
+        CREATE TABLE IF NOT EXISTS devices(
+            id        TEXT PRIMARY KEY,        -- 'poc' 是当前唯一设备
+            name      TEXT DEFAULT '',
+            token     TEXT DEFAULT '',
+            created   TEXT NOT NULL,
+            last_seen TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS content_packs(
+            name    TEXT PRIMARY KEY,          -- 'voice'（预录语音包）
+            version INTEGER NOT NULL,
+            note    TEXT DEFAULT '',
+            updated TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS habits(
             id      TEXT PRIMARY KEY,
             name    TEXT NOT NULL,
@@ -282,8 +295,16 @@ def init_db():
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('child_name',?)", (CHILD_NAME,))
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('coach_name',?)", (COACH_NAME,))
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('zika_auto','1')")
+    conn.execute("INSERT OR IGNORE INTO devices(id,name,created) VALUES('poc','POC 设备',?)",
+                 (now_iso(),))
+    conn.execute("INSERT OR IGNORE INTO content_packs(name,version,note,updated)"
+                 " VALUES('voice',1,'147 条预录语音（SD 卡 mp3/）',?)", (now_iso(),))
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('card_kind','question')")
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('card_ref','')")
+
+    ckcols = {r["name"] for r in conn.execute("PRAGMA table_info(checkins)")}
+    if ckcols and "device_id" not in ckcols:
+        conn.execute("ALTER TABLE checkins ADD COLUMN device_id TEXT DEFAULT 'poc'")
 
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(habits)")}
     for c in ("period", "steps", "rt_seq"):
@@ -514,6 +535,42 @@ def ask_ai(question):
         return data["choices"][0]["message"]["content"].strip(), ""
     except Exception as e:  # 网络/额度/key 错误都走这里
         return None, "调用失败：%s" % str(e)[:120]
+
+
+# ---------------- 设备身份 / 令牌（为将来上云预留） ----------------
+# 现在只有一台设备 'poc'；上云后每台设备一行，token 用于鉴权。
+# 环境变量 DEVICE_TOKEN 为空时不做校验（POC 默认），设置后 /api/* 必须带对。
+def device_id_of(q):
+    v = (q.get("d") or [""])[0] if q else ""
+    return (v.strip()[:32] or "poc")
+
+
+def token_required():
+    return (os.environ.get("DEVICE_TOKEN") or "").strip()
+
+
+def token_ok(q, headers=None):
+    want = token_required()
+    if not want:
+        return True
+    got = (q.get("t") or [""])[0] if q else ""
+    if not got and headers:
+        got = headers.get("X-Device-Token", "") or ""
+    return got == want
+
+
+def touch_device(conn, device_id):
+    conn.execute(
+        "INSERT OR IGNORE INTO devices(id,name,created) VALUES(?,?,?)",
+        (device_id, device_id, now_iso()))
+    conn.execute("UPDATE devices SET last_seen=? WHERE id=?", (now_iso(), device_id))
+    conn.commit()
+
+
+def voice_pack_version(conn):
+    row = conn.execute(
+        "SELECT version FROM content_packs WHERE name='voice'").fetchone()
+    return row["version"] if row else 1
 
 
 def add_question_pending(conn, category=""):
@@ -1213,7 +1270,7 @@ def render_album(conn):
     }
 
 
-def check_in(conn, habit_id):
+def check_in(conn, habit_id, device_id="poc"):
     day = today_str()
     exists = conn.execute(
         "SELECT 1 FROM habits WHERE id=? AND active=1", (habit_id,)
@@ -1222,8 +1279,8 @@ def check_in(conn, habit_id):
         return False, "未知习惯"
     try:
         conn.execute(
-            "INSERT INTO checkins(habit_id,day,ts) VALUES(?,?,?)",
-            (habit_id, day, now_iso()),
+            "INSERT INTO checkins(habit_id,day,ts,device_id) VALUES(?,?,?,?)",
+            (habit_id, day, now_iso(), device_id[:32] or "poc"),
         )
         conn.execute(
             "INSERT INTO events(kind,detail,ts) VALUES('checkin',?,?)",
@@ -1290,7 +1347,11 @@ def state_as_text(conn):
     END
     """
     s = today_state(conn)
+    # V= 必须第一行：固件据此判断服务器能力。
+    # 约定：**新字段一律追加在 END 之前，不改动已有行的顺序/含义**，
+    # 这样老固件遇到不认识的 KEY 直接忽略即可，不会解析错位。
     lines = [
+        "V=2",
         "DATE=" + s["day"],
         "CHILD=" + s["child_name"],
         "COACH=" + s["coach_name"],
@@ -1320,6 +1381,11 @@ def state_as_text(conn):
         )
     for a in s["approvals"]:
         lines.append("MSG=%d|%d|%s" % (a["id"], a.get("track", 0), a["from_who"]))
+    # 内容包版本：设备据此判断自己的 SD 卡语音是不是最新（将来 OTA 用）
+    _pack = conn.execute(
+        "SELECT version FROM content_packs WHERE name='voice'").fetchone()
+    lines.append("PACK=voice.%d" % (_pack["version"] if _pack else 1))
+
     lines.append("END")
     return "\n".join(lines) + "\n"
 
@@ -1852,6 +1918,11 @@ class Handler(BaseHTTPRequestHandler):
         path, q = self._query()
         conn = db()
         try:
+            # 上云预留：设了 DEVICE_TOKEN 后，/api/* 必须带对令牌
+            if path.startswith("/api/") and not token_ok(q, self.headers):
+                return self._send(401, "bad token", "text/plain")
+            if path.startswith("/api/"):
+                touch_device(conn, device_id_of(q))
             if path in ("/", "/index.html"):
                 code = (q.get("sent") or [""])[0]
                 sent = {
@@ -1945,6 +2016,10 @@ class Handler(BaseHTTPRequestHandler):
         path, q = self._query()
         conn = db()
         try:
+            if path.startswith("/api/") and not token_ok(q, self.headers):
+                return self._send(401, "bad token", "text/plain")
+            if path.startswith("/api/"):
+                touch_device(conn, device_id_of(q))
             # 极简记录页的提交（也是家长最常用的入口）
             if path == "/quick":
                 form = self._form()
@@ -1963,7 +2038,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/checkin.txt" or path == "/api/checkin":
                 habit = (q.get("habit") or [""])[0]
-                ok, msg = check_in(conn, habit)
+                ok, msg = check_in(conn, habit, device_id_of(q))
                 # 设备端只关心结果，返回一行
                 return self._send(200 if ok else 409, ("OK" if ok else "ERR " + msg) + "\n")
 
