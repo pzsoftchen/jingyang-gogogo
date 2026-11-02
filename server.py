@@ -59,7 +59,72 @@ HABIT_PRESETS = [
     ("pack",      "收书包",     "🎒", 19, 45, 41, 42, "extra", "", "", 0),
 ]
 DEFAULT_ACTIVE = ["brush", "toys"]
-MAX_HABITS = 4        # 设备固件最多画 4 颗星，别超
+# ---------------- 成长阶段（stage）----------------
+# 一个 stage 参数决定五件事：能开几件事、每天推几条、复习节奏、句子长短、要不要出文字。
+# 设备端完全不知道自己是给几岁孩子用的——它只知道"几颗星、播哪条语音、推哪张卡"。
+# 升级阶段 = 改一个设置 + 换一批语音包，不改协议、不重烧固件。
+STAGES = {
+    1: {
+        "name": "5–6 岁",
+        "max_habits": 2,
+        "content_budget": 2,        # 每天内容推送总条数（仪式动作不计）
+        "newchar_per_day": 1,
+        "review_intervals": [1, 3, 7, 15],
+        "show_text": False,
+        "note": "短句 1–5 秒、语速 145；只认不写；每天 2 件事；屏幕只画图标",
+    },
+    2: {
+        "name": "6–7 岁",
+        "max_habits": 3,
+        "content_budget": 2,
+        "newchar_per_day": 1,
+        "review_intervals": [1, 2, 4, 8, 15],
+        "show_text": False,
+        "note": "句子可以长一点；可以加第 3 件事；识字进入 L2（字族/偏旁）",
+    },
+    3: {
+        "name": "7–8 岁",
+        "max_habits": 4,
+        "content_budget": 3,
+        "newchar_per_day": 2,
+        "review_intervals": [1, 3, 7, 14, 30],
+        "show_text": True,
+        "note": "可以开始出文字；4 件事；识字带拼音；再往后就该换触摸交互了",
+    },
+}
+DEFAULT_STAGE = 1
+
+
+def get_stage(conn):
+    try:
+        n = int(get_setting(conn, "stage", str(DEFAULT_STAGE)))
+    except (TypeError, ValueError):
+        n = DEFAULT_STAGE
+    return n if n in STAGES else DEFAULT_STAGE
+
+
+def stage_cfg(conn):
+    return STAGES[get_stage(conn)]
+
+
+def max_habits(conn):
+    """设备固件最多画 4 个图标，阶段上限再小也不能超过它。"""
+    return min(4, stage_cfg(conn)["max_habits"])
+
+
+def review_intervals(conn):
+    return stage_cfg(conn)["review_intervals"]
+
+
+def push_limits(conn):
+    """按阶段算每天的推送配额。"""
+    cfg = stage_cfg(conn)
+    newchar = cfg["newchar_per_day"]
+    return {
+        "newchar": newchar,
+        "surprise": max(1, cfg["content_budget"] - newchar),
+        "praise": 99,          # 家长主动发的话不设上限（真人内容，是家长的选择）
+    }
 
 PERIODS = [("morning", "早上"), ("day", "白天"), ("night", "晚上"), ("extra", "单独版（想拆开练时用）")]
 
@@ -387,7 +452,7 @@ HABIT_ZIKA = {
 
 # 间隔重复：学完的第二天、第 4 天、第 11 天、第 26 天各见一次，然后毕业。
 # 5 岁半不做对错判定，只做"再见一次"的曝光式复习——不考试，只提醒。
-REVIEW_INTERVALS = [1, 3, 7, 15]
+# 复习间隔由阶段决定，见 review_intervals(conn)；下面这行只是默认值（阶段 1）
 
 QUESTION_PROMPT = """你是懂儿童发展的大人，正在帮一对父母回答 5 岁半男孩在公园提出的问题。
 
@@ -553,7 +618,8 @@ def zika_learned(conn, char):
     exists = conn.execute("SELECT 1 FROM zika_log WHERE char=?", (char,)).fetchone()
     if exists:
         return
-    due = (datetime.date.today() + datetime.timedelta(days=REVIEW_INTERVALS[0])).isoformat()
+    iv = review_intervals(conn)
+    due = (datetime.date.today() + datetime.timedelta(days=iv[0])).isoformat()
     conn.execute(
         "INSERT OR IGNORE INTO zika_log(char,track,first_day,stage,due_day) VALUES(?,?,?,0,?)",
         (char, row[2], today, due),
@@ -612,12 +678,13 @@ def advance_review(conn, char):
         return
     stage = int(r["stage"]) + 1
     day = today_str()
-    if stage >= len(REVIEW_INTERVALS):
+    iv = review_intervals(conn)
+    if stage >= len(iv):
         conn.execute("UPDATE zika_log SET stage=?, retired=1, last_day=? WHERE char=?",
                      (stage, day, char))
     else:
         nxt = (datetime.date.today()
-               + datetime.timedelta(days=REVIEW_INTERVALS[stage])).isoformat()
+               + datetime.timedelta(days=iv[stage])).isoformat()
         conn.execute("UPDATE zika_log SET stage=?, due_day=?, last_day=? WHERE char=?",
                      (stage, nxt, day, char))
     conn.commit()
@@ -635,11 +702,7 @@ def review_now(conn, char):
 # ---------------- 每日内容推送预算 ----------------
 # 原则：孩子每天收到的"内容推送"≤2 条。
 # 仪式动作（打卡、翻页）不计入——它们由孩子主动发起、可预期、1 秒完成。
-PUSH_BUDGET = {
-    "newchar": 1,     # 习惯联动带来的新字
-    "surprise": 1,    # 每日惊喜（问题答案 / 复习卡）
-    "praise": 99,     # 家长主动发的话：不设上限（真人内容，是家长的选择）
-}
+# 推送配额按阶段算，见 push_limits(conn)
 
 
 def push_count_today(conn, kind):
@@ -649,7 +712,8 @@ def push_count_today(conn, kind):
 
 
 def push_quota_left(conn, kind):
-    return max(0, PUSH_BUDGET.get(kind, 1) - push_count_today(conn, kind))
+    limits = push_limits(conn)
+    return max(0, limits.get(kind, 1) - push_count_today(conn, kind))
 
 
 def take_push(conn, kind, ref=""):
@@ -1212,6 +1276,7 @@ PAGE = """<!doctype html>
   .qbtns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
   .qbtns button{background:#232a33;color:var(--fg);border:1px solid var(--line);
       border-radius:9px;padding:7px 11px;font-size:13px;cursor:pointer}
+  .qbtns button.on{border-color:var(--pink);color:var(--pink);font-weight:600}
   .q textarea{min-height:90px;margin-top:8px}
   .zrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed var(--line)}
   .zrow:last-child{border-bottom:0}
@@ -1234,7 +1299,7 @@ PAGE = """<!doctype html>
         text-decoration:none;font-size:15px}
 </style></head><body><div class="wrap">
   <h1>{{CHILD}}</h1>
-  <div class="sub">今天 {{DAY}} · 每天最多推 2 次内容，不会更多</div>
+  <div class="sub">今天 {{DAY}} · {{STAGENAME}} · 每天最多推 {{BUDGET}} 次内容</div>
 
   <!-- ================= 1. 今天的惊喜（一天只有一个） ================= -->
   <div class="card">
@@ -1301,6 +1366,12 @@ PAGE = """<!doctype html>
 
     <div class="sub" style="margin:22px 0 8px">最近发出的</div>
     {{APPROVALS}}
+
+    <div class="sub" style="margin:22px 0 8px">成长阶段 · {{STAGENAME}}</div>
+    <form method="post" action="/parent/stage">
+      <div class="qbtns">{{STAGEBTNS}}</div>
+      <div class="sub" style="margin-top:8px">{{STAGENOTE}}</div>
+    </form>
 
     <div class="sub" style="margin:22px 0 8px">这个月开几件事（{{ACTIVECOUNT}}/{{MAXH}}）</div>
     <form method="post" action="/parent/habits">
@@ -1477,7 +1548,8 @@ def render_page(conn, sent=""):
 
     # 今天一共推了几条（预算：新字 1 + 惊喜 1）
     used_n = len(pushes_today(conn))
-    budget_n = PUSH_BUDGET["newchar"] + PUSH_BUDGET["surprise"]
+    _lim = push_limits(conn)
+    budget_n = _lim["newchar"] + _lim["surprise"]
     surprise_html += ('<div class="sub" style="margin-top:10px">今天已推送 %d/%d 条内容'
                       '（新字 %d + 惊喜 %d），仪式动作不计入</div>'
                       % (used_n, budget_n,
@@ -1504,7 +1576,8 @@ def render_page(conn, sent=""):
         else:
             stage = int(l["stage"])
             state_txt = "第 %d/%d 次复习 · 下次 %s" % (
-                min(stage + 1, len(REVIEW_INTERVALS)), len(REVIEW_INTERVALS), l["due_day"][5:])
+                min(stage + 1, len(review_intervals(conn))), len(review_intervals(conn)),
+                l["due_day"][5:])
             extra = ('<form method="post" action="/parent/review" style="display:inline">'
                      '<input type="hidden" name="char" value="%s">'
                      '<button class="mini">现在复习</button></form>' % l["char"])
@@ -1516,6 +1589,14 @@ def render_page(conn, sent=""):
         rl.append('<div class="zrow"><b>%s</b><span class="zst">%s</span>%s%s</div>'
                   % (l["char"], state_txt, extra, retire))
     review_list = "".join(rl) if rl else '<div class="qwait">还没有学的字。点上面的字开始。</div>'
+
+    cur_stage = get_stage(conn)
+    cfg = stage_cfg(conn)
+    stage_btns = "".join(
+        '<button type="submit" name="stage" value="%d" class="%s">%s</button>'
+        % (n, "on" if n == cur_stage else "", STAGES[n]["name"])
+        for n in sorted(STAGES)
+    )
 
     zika_html = "".join(
         '<form method="post" action="/parent/zika" style="display:inline">'
@@ -1556,7 +1637,11 @@ def render_page(conn, sent=""):
         "{{APPROVALS}}": approvals_html,
         "{{HABITTOGGLES}}": habit_toggles(conn),
         "{{ACTIVECOUNT}}": str(s["total"]),
-        "{{MAXH}}": str(MAX_HABITS),
+        "{{MAXH}}": str(max_habits(conn)),
+        "{{STAGENAME}}": cfg["name"],
+        "{{STAGENOTE}}": cfg["note"],
+        "{{STAGEBTNS}}": stage_btns,
+        "{{BUDGET}}": str(cfg["content_budget"]),
         "{{QUESTIONS}}": questions_html,
         "{{CARDS}}": cards_html,
         "{{ZIKA}}": zika_html,
@@ -1617,7 +1702,10 @@ class Handler(BaseHTTPRequestHandler):
                 sent = {
                     "1": "✅ 已发到设备上，等孩子下次完成任务就会听到",
                     "habsaved": "✅ 已保存，设备 15 秒内会自动同步（或长按 B 立即同步）",
-                    "habmax": "⚠️ 最多只能开 %d 件，这次没有保存。先关掉几件再试。" % MAX_HABITS,
+                    "habmax": "⚠️ 最多只能开 %d 件（当前阶段上限），这次没有保存。" % max_habits(conn),
+                    "stage": "✅ 阶段已切换。内容推送上限、习惯件数、复习节奏都跟着变了。",
+                    "stageover": "✅ 阶段已切换，但当前开的习惯数超过新阶段上限——没有强制关掉，你可以手动减。",
+                    "stagenone": "⚠️ 未知阶段。",
                     "hab0": "⚠️ 至少要开 1 件。",
                     "revoked": "↩️ 已撤回该记录（只在家长页留痕，设备端不会提示孩子）",
                     "qadd": "✅ 记下了。回家再一起找答案——别在路上就给答案，先问问他怎么想。",
@@ -1702,12 +1790,24 @@ class Handler(BaseHTTPRequestHandler):
                              slot=slot, note=(form.get("note") or [""])[0])
                 return self._send(200, '{"ok":true}', "application/json; charset=utf-8")
 
+            if path == "/parent/stage":
+                form = self._form()
+                n = self._int(form.get("stage"))
+                if n in STAGES:
+                    set_setting(conn, "stage", str(n))
+                    conn.commit()
+                    # 调低阶段时不强制关掉已开的习惯，只提示
+                    over = len(get_habits(conn)) > max_habits(conn)
+                    return self._send(303, "", headers={
+                        "Location": "/?sent=" + ("stageover" if over else "stage")})
+                return self._send(303, "", headers={"Location": "/?sent=stagenone"})
+
             if path == "/parent/habits":
                 form = self._form()
                 on = [h for h in (form.get("on") or []) if any(r[0] == h for r in HABIT_PRESETS)]
                 if not on:
                     return self._send(303, "", headers={"Location": "/?sent=hab0"})
-                if len(on) > MAX_HABITS:
+                if len(on) > max_habits(conn):
                     return self._send(303, "", headers={"Location": "/?sent=habmax"})
                 conn.execute("UPDATE habits SET active=0")
                 for i, hid in enumerate(on):

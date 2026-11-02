@@ -210,7 +210,7 @@ class ReviewTests(Base):
         row = self.conn.execute("SELECT stage,due_day FROM zika_log WHERE char='牙'").fetchone()
         self.assertEqual(row["stage"], 1)
         expect = (datetime.date.today()
-                  + datetime.timedelta(days=server.REVIEW_INTERVALS[1])).isoformat()
+                  + datetime.timedelta(days=server.review_intervals(self.conn)[1])).isoformat()
         self.assertEqual(row["due_day"], expect)
 
 
@@ -358,3 +358,48 @@ class HttpTests(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+class StageTests(Base):
+    """成长阶段：一个参数控制上限/预算/复习节奏。"""
+
+    def test_default_stage_is_one(self):
+        self.assertEqual(server.get_stage(self.conn), 1)
+        self.assertEqual(server.max_habits(self.conn), 2)
+        self.assertEqual(server.stage_cfg(self.conn)["content_budget"], 2)
+
+    def test_stage_switch_changes_limits(self):
+        server.set_setting(self.conn, "stage", "3")
+        self.conn.commit()
+        self.assertEqual(server.get_stage(self.conn), 3)
+        self.assertEqual(server.max_habits(self.conn), 4)
+        self.assertEqual(server.stage_cfg(self.conn)["content_budget"], 3)
+        self.assertEqual(server.push_limits(self.conn)["newchar"], 2)
+        self.assertEqual(server.review_intervals(self.conn), [1, 3, 7, 14, 30])
+
+    def test_invalid_stage_falls_back(self):
+        server.set_setting(self.conn, "stage", "99")
+        self.conn.commit()
+        self.assertEqual(server.get_stage(self.conn), 1)
+
+    def test_stage_limits_never_exceed_firmware(self):
+        """固件最多画 4 个图标，阶段上限不能超过它。"""
+        for n in server.STAGES:
+            server.set_setting(self.conn, "stage", str(n))
+            self.conn.commit()
+            self.assertLessEqual(server.max_habits(self.conn), 4)
+
+    def test_review_uses_stage_intervals(self):
+        server.set_setting(self.conn, "stage", "3")
+        self.conn.commit()
+        server.zika_learned(self.conn, "牙")
+        row = self.conn.execute("SELECT due_day FROM zika_log WHERE char='牙'").fetchone()
+        expect = (datetime.date.today()
+                  + datetime.timedelta(days=server.review_intervals(self.conn)[0])).isoformat()
+        self.assertEqual(row["due_day"], expect)
+
+    def test_content_budget_per_stage(self):
+        server.set_setting(self.conn, "stage", "3")
+        self.conn.commit()
+        limits = server.push_limits(self.conn)
+        self.assertEqual(limits["newchar"] + limits["surprise"], 3)
+
