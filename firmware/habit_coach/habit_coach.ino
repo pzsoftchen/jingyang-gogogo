@@ -23,6 +23,7 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <Arduino_GFX_Library.h>
+#include "habit_icons.h"      // 习惯 emoji 图标（由 tools/gen_icons.py 生成）
 #include <esp_heap_caps.h>
 #if __has_include(<esp_arduino_version.h>)
 #include <esp_arduino_version.h>
@@ -234,6 +235,70 @@ void drawStar(int cx, int cy, int r, bool filled, bool sel) {
 
 void renderCard();   // 前置声明
 
+// ---------- 习惯图标（不识字也能认出"现在该做哪件"）----------
+int iconIndexOf(const String &id) {
+  for (int i = 0; i < HABIT_ICON_COUNT; i++) {
+    if (id == HABIT_ICON_IDS[i]) return i;
+  }
+  return -1;
+}
+
+void drawHabitIcon(int cx, int cy, const String &id, bool done, bool sel) {
+  // 底：一个深色圆，让图标有"卡片"的感觉
+  ui->fillCircle(cx, cy, 24, 0x10A2);
+
+  int idx = iconIndexOf(id);
+  if (idx >= 0) {
+    ui->draw16bitRGBBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2,
+                           (const uint16_t *)HABIT_ICON_PIX[idx], HABIT_ICON_W, HABIT_ICON_H);
+  } else {
+    drawStar(cx, cy, 16, done, false);      // 没配图标的习惯用星星兜底
+  }
+
+  // 完成：金色环 + 对勾；未完成：暗环。孩子不需要读字，只要分得清"有没有金圈"
+  if (done) {
+    ui->drawCircle(cx, cy, 24, C_STAR_ON);
+    ui->drawCircle(cx, cy, 23, C_STAR_ON);
+    ui->fillCircle(cx + 17, cy + 17, 8, C_STAR_ON);
+    ui->drawLine(cx + 13, cy + 17, cx + 16, cy + 21, C_INK);
+    ui->drawLine(cx + 16, cy + 21, cx + 21, cy + 13, C_INK);
+  } else {
+    ui->drawCircle(cx, cy, 24, C_STAR_OFF);
+  }
+
+  if (sel) ui->drawCircle(cx, cy, 29, C_ACCENT);
+}
+
+// ---------- 庆祝动画：全部完成时放 1 秒 ----------
+void playCelebration() {
+  const int N = 20;
+  float ang[N], spd[N];
+  uint16_t col[N];
+  const uint16_t palette[5] = {C_STAR_ON, 0xFE60, 0xFD20, 0x07FF, 0xF81F};
+  for (int i = 0; i < N; i++) {
+    ang[i] = random(0, 628) / 100.0f;
+    spd[i] = 1.0f + random(0, 100) / 70.0f;
+    col[i] = palette[random(0, 5)];
+  }
+  for (int f = 0; f < 34; f++) {
+    ui->fillScreen(C_BG);
+    drawEyes(1);
+    drawMouth(1);
+    float t = f * 1.1f;
+    for (int i = 0; i < N; i++) {
+      int r = (int)(12 + t * spd[i]);
+      if (r > 115) continue;
+      int x = 120 + (int)(cos(ang[i]) * r);
+      int y = 120 + (int)(sin(ang[i]) * r);
+      if (x < 6 || x > 234 || y < 6 || y > 234) continue;
+      ui->fillCircle(x, y, (f < 18) ? 4 : 2, col[i]);
+    }
+    if (canvasOk) canvas->flush();
+    delay(28);
+  }
+  needRedraw = true;
+}
+
 void render() {
   if (cardMode) { renderCard(); return; }
   ui->fillScreen(C_BG);
@@ -251,13 +316,12 @@ void render() {
   drawEyes(expr);
   drawMouth(expr);
 
-  // 今天要做的事：星星数量跟着家长页变（1~4 颗）
+  // 今天要做的事：每个习惯一个 emoji 图标（不识字也能认出牙刷和玩具）
   if (habCount > 0) {
     int gap = (habCount > 1) ? (200 / habCount) : 0;
     int startX = 120 - (habCount - 1) * gap / 2;
-    int r = (habCount <= 2) ? 23 : (habCount == 3 ? 19 : 16);
     for (int i = 0; i < habCount; i++) {
-      drawStar(startX + i * gap, 178, r, hab[i].done, (i == selected));
+      drawHabitIcon(startX + i * gap, 176, hab[i].id, hab[i].done, (i == selected));
     }
   } else {
     ui->setTextColor(C_TXT);
@@ -656,6 +720,7 @@ void completeHabit(int idx) {
     say(VOICE_ALL_DONE);
     happyFor(6000);
     setBanner("ALL DONE!", 6000);
+    playCelebration();
   } else if (doneCount() == habCount - 1) {
     delay(1200);
     say(VOICE_ONE_LEFT);

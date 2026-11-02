@@ -185,6 +185,31 @@ cd voice-pack && VOICE=Meijia RATE=160 ./make_voice.sh
 > 里程碑是**系统自动发**的：孩子当天全部完成、且连续天数撞上 3/7/14/30，服务器会自动排一条
 > 语音（track 21–24），设备下次同步就播出来。不需要你在手机上点。
 
+## 八点四、习惯图标与庆祝动画
+
+**每个习惯在设备上是一个 emoji 图标**（🪥 刷牙、🧸 收玩具、🛁 洗澡…），不是一个抽象的星星。
+
+理由：5 岁半不识字，能认出"牙刷"但认不出"第三颗星"。家长页和屏幕上用的是同一个图标，
+孩子和家长看到的是同一件事。
+
+- 图标由 `tools/gen_icons.py` 用 Apple Color Emoji 预渲染成 40×40 RGB565，
+  生成 `firmware/habit_coach/habit_icons.h`（13 个图标，约 42KB）
+- 设备端零字库、零缩放，直接 `draw16bitRGBBitmap` 贴图
+- 完成态：金色圆环 + 右下角对勾；未完成：暗色圆环；选中：外圈橙色
+
+**庆祝动画**：全部完成时放 1 秒的粒子扩散（20 个彩色粒子 + 笑脸），
+而不是只把最后一颗图标点亮。对 5 岁半，"动起来"才叫反馈。
+
+重新生成图标（改了 emoji 或加了新习惯）：
+
+```bash
+python3 tools/gen_icons.py     # 会同时更新 docs/img/habit_icons.png 预览图
+```
+
+改完记得在 `server.py` 的 `HABIT_PRESETS` 和 `tools/gen_icons.py` 的 `ICONS` 里保持 id 一致。
+
+---
+
 ## 八点五、为什么按 5 岁半这样改
 
 | 调整 | 原因 |
