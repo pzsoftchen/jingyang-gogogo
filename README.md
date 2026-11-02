@@ -168,7 +168,10 @@ python3 server.py            # 打开 http://127.0.0.1:8099
 python3 tools/demo_seed.py
 ./tools/reset.sh             # 正式用之前清空
 
-# 3. 设备端：先跑分步验收，再烧完整固件
+# 3. 跑回归测试（35 个，改完代码必跑）
+make test
+
+# 4. 设备端：先跑分步验收，再烧完整固件
 #    见 docs/hardware-bringup.md
 ```
 

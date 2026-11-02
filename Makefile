@@ -11,5 +11,8 @@ voices:
 	cd voice-pack && ./make_voice.sh
 
 check:
-	python3 -m py_compile server.py card.py tools/demo_seed.py
+	python3 -m py_compile server.py card.py tools/demo_seed.py tests/test_server.py
 	echo "syntax OK"
+
+test:
+	python3 -m unittest discover -s tests -v

@@ -157,6 +157,13 @@ def init_db():
             key   TEXT PRIMARY KEY,
             value TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS pushes(
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            day  TEXT NOT NULL,
+            kind TEXT NOT NULL,          -- newchar / surprise / praise
+            ref  TEXT DEFAULT '',
+            ts   TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS zika_log(
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
             char      TEXT NOT NULL UNIQUE,
@@ -460,11 +467,10 @@ def answer_question(conn, qid, answer, announce=True):
     conn.commit()
     conn.execute("UPDATE questions SET announced=0 WHERE id=?", (qid,))
     conn.commit()
-    if announce and claim_surprise(conn):
+    if announce and take_push(conn, "surprise", "question:%d" % qid):
         clear_card_queue(conn)
         add_approval(conn, "", "小豆", track=64, kind="question")
         conn.execute("UPDATE questions SET announced=1 WHERE id=?", (qid,))
-        mark_surprise(conn, "question", str(qid))
         conn.commit()
     return True
 
@@ -522,9 +528,6 @@ def auto_push_zika(conn, habit_id):
     """
     if get_setting(conn, "zika_auto", "1") != "1":
         return
-    day = today_str()
-    if get_setting(conn, "zika_new_day", "") == day:
-        return          # 今天已经自动教过一个字了
     ch = HABIT_ZIKA.get(habit_id)
     if not ch:
         return
@@ -534,9 +537,10 @@ def auto_push_zika(conn, habit_id):
     # 已经停在同一个字上就不重复推
     if get_setting(conn, "card_kind") == "zika" and get_setting(conn, "card_ref") == ch:
         return
+    if not take_push(conn, "newchar", ch):
+        return              # 今天的新字名额已经用掉了
     push_card(conn, ch, review=False)
     zika_learned(conn, ch)
-    set_setting(conn, "zika_new_day", day)
     conn.commit()
 
 
@@ -628,27 +632,66 @@ def review_now(conn, char):
     return True
 
 
-def claim_surprise(conn):
-    """每天只有一个"惊喜"名额。返回 True 表示今天还没用过。"""
-    day = today_str()
-    if get_setting(conn, "surprise_day", "") == day:
+# ---------------- 每日内容推送预算 ----------------
+# 原则：孩子每天收到的"内容推送"≤2 条。
+# 仪式动作（打卡、翻页）不计入——它们由孩子主动发起、可预期、1 秒完成。
+PUSH_BUDGET = {
+    "newchar": 1,     # 习惯联动带来的新字
+    "surprise": 1,    # 每日惊喜（问题答案 / 复习卡）
+    "praise": 99,     # 家长主动发的话：不设上限（真人内容，是家长的选择）
+}
+
+
+def push_count_today(conn, kind):
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM pushes WHERE day=? AND kind=?", (today_str(), kind)
+    ).fetchone()["n"]
+
+
+def push_quota_left(conn, kind):
+    return max(0, PUSH_BUDGET.get(kind, 1) - push_count_today(conn, kind))
+
+
+def take_push(conn, kind, ref=""):
+    """占用一次推送名额；今天没有名额了就返回 False。"""
+    if push_quota_left(conn, kind) <= 0:
         return False
-    set_setting(conn, "surprise_day", day)
+    conn.execute("INSERT INTO pushes(day,kind,ref,ts) VALUES(?,?,?,?)",
+                 (today_str(), kind, ref, now_iso()))
     conn.commit()
     return True
 
 
+def pushes_today(conn):
+    rows = conn.execute(
+        "SELECT kind,ref,ts FROM pushes WHERE day=? ORDER BY id", (today_str(),)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def claim_surprise(conn):
+    """占用今天唯一的"惊喜"名额。"""
+    return take_push(conn, "surprise")
+
+
 def mark_surprise(conn, kind, ref=""):
-    set_setting(conn, "surprise_kind", kind)
-    set_setting(conn, "surprise_ref", ref)
+    """把今天这条惊喜名额的用途记下来（question:12 / review:牙 / skip）。"""
+    conn.execute(
+        "UPDATE pushes SET ref=? WHERE id=(SELECT MAX(id) FROM pushes WHERE day=? AND kind='surprise')",
+        ("%s:%s" % (kind, ref) if kind else "", today_str()),
+    )
+    conn.commit()
 
 
 def surprise_state(conn):
     """今天这个惊喜名额用掉了没有、用在了什么上。"""
-    day = today_str()
-    used = get_setting(conn, "surprise_day", "") == day
-    kind = get_setting(conn, "surprise_kind", "") if used else ""
-    ref = get_setting(conn, "surprise_ref", "") if used else ""
+    row = conn.execute(
+        "SELECT ref FROM pushes WHERE day=? AND kind='surprise' ORDER BY id DESC LIMIT 1",
+        (today_str(),),
+    ).fetchone()
+    ref = (row["ref"] if row else "") or ""
+    used = bool(row)
+    kind = ref.split(":")[0] if ref else ""
     names = {"question": "一个问题的答案", "review": "复习一张识字卡",
              "praise": "爸妈的一句话", "skip": "今天先不给"}
     return {
@@ -671,26 +714,24 @@ def push_daily_surprise(conn):
       2. 该复习的字卡到期（识字 = 顺带实现）
       3. 都没有 → 今天不给惊喜（安静也是一种设计）
     """
-    day = today_str()
-    if get_setting(conn, "surprise_day", "") == day:
+    if push_quota_left(conn, "surprise") <= 0:
         return ""
     st = surprise_state(conn)
     q = st["pending_question"]
     if q:
+        if not take_push(conn, "surprise", "question:%d" % q["id"]):
+            return ""
         clear_card_queue(conn)
         add_approval(conn, "", "小豆", track=64, kind="question")
         conn.execute("UPDATE questions SET announced=1 WHERE id=?", (q["id"],))
-        mark_surprise(conn, "question", str(q["id"]))
-        set_setting(conn, "surprise_day", day)
         conn.commit()
         return "question"
     r = st["due_review"]
     if r:
+        if not take_push(conn, "surprise", "review:%s" % r["char"]):
+            return ""
         push_card(conn, r["char"], review=True)
         advance_review(conn, r["char"])
-        mark_surprise(conn, "review", r["char"])
-        set_setting(conn, "surprise_day", day)
-        conn.commit()
         return "review"
     return ""
 
@@ -1434,6 +1475,15 @@ def render_page(conn, sent=""):
             surprise_html = ('<div class="sub" style="margin:0">今天没有要给的惊喜。'
                              '安静也是一种设计——明天有了再说。</div>')
 
+    # 今天一共推了几条（预算：新字 1 + 惊喜 1）
+    used_n = len(pushes_today(conn))
+    budget_n = PUSH_BUDGET["newchar"] + PUSH_BUDGET["surprise"]
+    surprise_html += ('<div class="sub" style="margin-top:10px">今天已推送 %d/%d 条内容'
+                      '（新字 %d + 惊喜 %d），仪式动作不计入</div>'
+                      % (used_n, budget_n,
+                         push_count_today(conn, "newchar"),
+                         push_count_today(conn, "surprise")))
+
     q_count = conn.execute("SELECT COUNT(*) AS n FROM questions").fetchone()["n"]
 
     zika_map = " · ".join(
@@ -1672,8 +1722,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/parent/surprise_skip":
                 if claim_surprise(conn):
-                    mark_surprise(conn, "skip")
-                    conn.commit()
+                    mark_surprise(conn, "skip", "")
                 return self._send(303, "", headers={"Location": "/?sent=sskip"})
 
             if path == "/parent/review":
