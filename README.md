@@ -22,6 +22,23 @@
 
 ---
 
+## 三层解释：这个产品为什么成立
+
+同样的东西，可以从三个深度去理解。三层必须互相自洽，否则产品会往两个方向走。
+
+| 层 | 回答的问题 | 文档 |
+|---|---|---|
+| **第一层 · 习惯科学** | 怎么做才有效？（66 天、过程性表扬、不做奖励机制） | [docs/habit-system.md](docs/habit-system.md) |
+| **第二层 · 自驱力与衍生物** | 为什么要做？（主线是自驱力；识字/作业/成绩是衍生物） | 下面「主线：自驱力」 |
+| **第三层 · 秩序与美** | 动力从哪来？（建立秩序的愉悦 → 自发探索） | [docs/aesthetic-order.md](docs/aesthetic-order.md) |
+
+一句话串起来：
+
+> **习惯是时间的秩序，好奇心是世界的秩序，识字是符号的秩序。**
+> **建立秩序的愉悦，就是自驱力的燃料。**
+
+---
+
 ## 三条设计原则
 
 | 原则 | 落地 |
@@ -88,7 +105,8 @@
 
 ### 一条具体的落地：每天只有一个"惊喜"
 
-一天只推一个内容，按主线优先级挑：
+**每天的内容推送总预算 ≤2 次**（仪式动作如打卡不计入）：新字 1 次 + 惊喜 1 次。
+按主线优先级挑惊喜：
 
 ```
 1. 有答案还没告诉他的问题   ← 好奇心（主线）
@@ -171,6 +189,8 @@ cd voice-pack && ./make_voice.sh      # 需要 macOS 的 say + ffmpeg
 | [docs/habit-system.md](docs/habit-system.md) | 习惯养成的科学依据：66 天、过程性表扬、为什么不做奖励机制 |
 | [docs/product-review.md](docs/product-review.md) | 一次认真的自我评审：模块叠加的问题、该砍什么、优先级 |
 | [docs/competitor-skylight-buddy.md](docs/competitor-skylight-buddy.md) | 竞品分析：Skylight Buddy（$120+$39/年）做对了什么、我们该学什么 |
+| [docs/aesthetic-order.md](docs/aesthetic-order.md) | **第三层解释**：秩序与美——自驱力的来源 |
+| [docs/self-consistency-review.md](docs/self-consistency-review.md) | **自洽审计**：原则 ↔ 实现的差距清单 |
 | [docs/child-perspective.md](docs/child-perspective.md) | 从孩子视角写的一天——他到底感受到了什么 |
 
 ---
