@@ -127,6 +127,7 @@ cd voice-pack && ./make_voice.sh      # 需要 macOS 的 say + ffmpeg
 | [docs/hardware-bringup.md](docs/hardware-bringup.md) | 硬件清单 + 分步验收（一次只测一种硬件） |
 | [docs/habit-system.md](docs/habit-system.md) | 习惯养成的科学依据：66 天、过程性表扬、为什么不做奖励机制 |
 | [docs/product-review.md](docs/product-review.md) | 一次认真的自我评审：模块叠加的问题、该砍什么、优先级 |
+| [docs/competitor-skylight-buddy.md](docs/competitor-skylight-buddy.md) | 竞品分析：Skylight Buddy（$120+$39/年）做对了什么、我们该学什么 |
 | [docs/child-perspective.md](docs/child-perspective.md) | 从孩子视角写的一天——他到底感受到了什么 |
 
 ---
