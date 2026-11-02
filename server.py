@@ -81,7 +81,6 @@ def habit_meta(hid):
             "zika": HABIT_ZIKA.get(hid, "")}
 CHILD_NAME = os.environ.get("CHILD_NAME", "景阳")
 COACH_NAME = os.environ.get("COACH_NAME", "小豆豆")
-DAILY_LIMIT_MIN = 20          # 5 岁半：每天建议上限（分钟）
 # 10 条默认认可台词，与 SD 卡里的 0031.mp3 ~ 0040.mp3 一一对应。
 # 建议最终换成你自己录的声音（见 README「把爸妈的声音放进设备」）。
 # 10 句「过程性表扬」，对应 SD 卡 0031~0040。
@@ -104,15 +103,9 @@ PRESET_PRAISE = [
 # 里程碑：连续天数 → 语音编号（0021~0024）
 MILESTONE_TRACKS = {3: 21, 7: 22, 14: 23, 30: 24}
 
-# 能力徽章：描述"你会了什么"，不是"你得了多少分"
-BADGES = [
-    ("第一天", "完整做完一天", "days", 1),
-    ("三天火苗", "连着三天没断", "best", 3),
-    ("一周不倒", "连续七天", "best", 7),
-    ("两周", "连续十四天", "best", 14),
-    ("一个月", "连续三十天", "best", 30),
-    ("习惯成自然", "累计打卡 50 次", "checkins", 50),
-]
+# 徽章已砍（自洽审计 A1）：
+# 6 个徽章全是"坚持时长"而非"能力"，名实不符，且属于新增进度货币。
+# "能力"的表达改由周回顾里的一句话承担。
 
 
 # ----------------------------- 数据库 -----------------------------
@@ -760,17 +753,6 @@ def stats(conn):
     }
 
 
-def badges(conn):
-    st = stats(conn)
-    out = []
-    for name, desc, field, need in BADGES:
-        out.append({
-            "name": name,
-            "desc": desc,
-            "unlocked": st.get(field, 0) >= need,
-            "progress": "%d/%d" % (min(st.get(field, 0), need), need),
-        })
-    return out
 
 
 def review_text(conn):
@@ -976,8 +958,8 @@ def render_album(conn):
     <h1>%(child)s 的成长档案</h1>
     <div class="sub">从 %(start)s 开始 · 第 %(days)d 天 · 角色「%(coach)s」</div>
     <div class="row3">
-      <div class="stat"><b>%(learned)d<small>/%(total)d</small></b><span>认识的字</span></div>
-      <div class="stat"><b>%(qans)d<small>/%(qall)d</small></b><span>问过的问题</span></div>
+      <div class="stat"><b>%(learned)d</b><span>会了的字</span></div>
+      <div class="stat"><b>%(qall)d</b><span>问过的问题</span></div>
       <div class="stat"><b>%(checkins)d</b><span>完成次数</span></div>
       <div class="stat"><b>%(best)d</b><span>最长连续</span></div>
     </div>
@@ -1150,12 +1132,6 @@ PAGE = """<!doctype html>
   .day b{display:block;font-size:18px;color:var(--fg)}
   .day.full{background:#123a2b;color:#9fe6c6}
   .day.full b{color:var(--ok)}
-  .badges{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  .badge{background:#141a21;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
-  .badge b{display:block;font-size:14px;color:var(--gold)}
-  .badge span{font-size:11px;color:var(--dim)}
-  .badge.locked{opacity:.32}
-  .badge.locked b{color:var(--fg)}
   .review{white-space:pre-wrap;font-size:14px;line-height:1.75;background:#12171d;
           border-radius:10px;padding:12px;border-left:3px solid var(--pink)}
   .slots{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
@@ -1217,7 +1193,7 @@ PAGE = """<!doctype html>
         text-decoration:none;font-size:15px}
 </style></head><body><div class="wrap">
   <h1>{{CHILD}}</h1>
-  <div class="sub">今天 {{DAY}} · 设备互动建议 ≤{{LIMIT}} 分钟</div>
+  <div class="sub">今天 {{DAY}} · 每天最多推 2 次内容，不会更多</div>
 
   <!-- ================= 1. 今天的惊喜（一天只有一个） ================= -->
   <div class="card">
@@ -1227,7 +1203,7 @@ PAGE = """<!doctype html>
 
   <!-- ================= 2. 今天要做的 ================= -->
   <div class="card">
-    <div class="sub" style="margin:0 0 6px">{{DONE}}/{{TOTAL}} · 🔥{{STREAK}} 天</div>
+    <div class="sub" style="margin:0 0 6px">今天 {{DONE}}/{{TOTAL}}</div>
     {{HABITS}}
   </div>
 
@@ -1263,15 +1239,13 @@ PAGE = """<!doctype html>
     <summary>更多：进度 / 识字 / 设置</summary>
 
     <div style="margin-top:14px">
+      <div class="sub" style="margin:0 0 8px">连续 {{STREAK}} 天 · 最长 {{BEST}} 天（只给你看）</div>
       <div class="sub" style="margin:0 0 8px">最近 7 天</div>
       <div class="week">{{WEEK}}</div>
     </div>
 
     <div class="sub" style="margin:18px 0 8px">本周回顾</div>
     <div class="review">{{REVIEW}}</div>
-
-    <div class="sub" style="margin:18px 0 8px">能力徽章</div>
-    <div class="badges">{{BADGES}}</div>
 
     <div class="sub" style="margin:22px 0 8px">认一个字 · 只认不写</div>
     <div class="chips">{{ZIKA}}</div>
@@ -1383,14 +1357,6 @@ def render_page(conn, sent=""):
         week_html.append(
             '<div class="day %s">%s<b>%d</b></div>'
             % ("full" if full else "", label, d["count"])
-        )
-
-    badges_html = []
-    for b in badges(conn):
-        badges_html.append(
-            '<div class="badge %s"><b>%s</b><span>%s · %s</span></div>'
-            % ("" if b["unlocked"] else "locked",
-               ("★ " if b["unlocked"] else "") + b["name"], b["desc"], b["progress"])
         )
 
     slots_html = "".join(
@@ -1529,14 +1495,12 @@ def render_page(conn, sent=""):
         "{{CHILD}}": s["child_name"],
         "{{COACH}}": s["coach_name"],
         "{{DAY}}": s["day"],
-        "{{LIMIT}}": str(DAILY_LIMIT_MIN),
         "{{STREAK}}": str(st["streak"]),
         "{{BEST}}": str(st["best"]),
         "{{DONE}}": str(s["done_count"]),
         "{{TOTAL}}": str(s["total"]),
         "{{HABITS}}": "".join(habits_html),
         "{{WEEK}}": "".join(week_html),
-        "{{BADGES}}": "".join(badges_html),
         "{{REVIEW}}": review_text(conn),
         "{{SLOTS}}": slots_html,
         "{{APPROVALS}}": approvals_html,

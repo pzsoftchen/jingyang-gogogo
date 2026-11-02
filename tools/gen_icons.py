@@ -25,6 +25,7 @@ ICONS = [
     ("brush",    "🪥"),
     ("toys",     "🧸"),
     ("bathflow", "🛁"),
+    ("bath",     "🛁"),
     ("laundry",  "🧺"),
     ("wake",     "🌞"),
     ("book",     "📖"),

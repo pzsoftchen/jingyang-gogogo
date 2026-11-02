@@ -193,7 +193,7 @@ cd voice-pack && VOICE=Meijia RATE=160 ./make_voice.sh
 孩子和家长看到的是同一件事。
 
 - 图标由 `tools/gen_icons.py` 用 Apple Color Emoji 预渲染成 40×40 RGB565，
-  生成 `firmware/habit_coach/habit_icons.h`（13 个图标，约 42KB）
+  生成 `firmware/habit_coach/habit_icons.h`（14 个图标，约 45KB）
 - 设备端零字库、零缩放，直接 `draw16bitRGBBitmap` 贴图
 - 完成态：金色圆环 + 右下角对勾；未完成：暗色圆环；选中：外圈橙色
 
