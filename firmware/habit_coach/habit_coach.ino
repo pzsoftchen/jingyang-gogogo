@@ -106,6 +106,10 @@
   #define SD_CLK    14
   #define SD_CMD    17
   #define SD_D0     16
+  // 板载 I2S 数字麦克风（MIC_WS=2 / MIC_SCK=15 / MIC_SD=39），但默认关闭：
+  // 孩子音频不出设备（见 docs/network-strategy.md 红线 2）。
+  // 改成 1 只允许「本地唤醒 + 本地命令词」，不要把音频上传。
+  #define USE_MIC    0
   // 这块板没有用户按键（只有 RESET/BOOT），交互靠触摸
   #define BTN_A     -1
   #define BTN_B     -1

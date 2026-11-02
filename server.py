@@ -656,6 +656,7 @@ def card_pages(conn, qid=None, size=None):
 def pending_questions(conn, limit=6):
     rows = conn.execute(
         "SELECT id,question,answer,status,created,answered FROM questions"
+        " WHERE status!='pending'"
         " ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
     return [dict(r) for r in rows]
@@ -1014,14 +1015,16 @@ def album_data(conn):
 
     # 问题册
     questions = [dict(r) for r in conn.execute(
-        "SELECT id,question,answer,status,created,answered FROM questions ORDER BY id"
+        "SELECT id,question,answer,status,created,answered FROM questions"
+        " WHERE status!='pending' ORDER BY id"
     )]
 
     # 习惯统计
     st = stats(conn)
     first_checkin = conn.execute("SELECT MIN(day) AS d FROM checkins").fetchone()["d"]
     first_zika = conn.execute("SELECT MIN(first_day) AS d FROM zika_log").fetchone()["d"]
-    first_q = conn.execute("SELECT MIN(substr(created,1,10)) AS d FROM questions").fetchone()["d"]
+    first_q = conn.execute(
+        "SELECT MIN(substr(created,1,10)) AS d FROM questions WHERE status!='pending'").fetchone()["d"]
     starts = [d for d in (first_checkin, first_zika, first_q) if d]
     start = min(starts) if starts else today_str()
     try:
@@ -1043,7 +1046,7 @@ def album_data(conn):
         firsts.append(("认识的第一个字", first_zika, row["char"] if row else ""))
     if first_q:
         row = conn.execute(
-            "SELECT question FROM questions ORDER BY id LIMIT 1").fetchone()
+            "SELECT question FROM questions WHERE status!='pending' ORDER BY id LIMIT 1").fetchone()
         firsts.append(("问的第一个问题", first_q, row["question"] if row else ""))
 
     return {
@@ -1674,7 +1677,8 @@ def render_page(conn, sent=""):
                          push_count_today(conn, "newchar"),
                          push_count_today(conn, "surprise")))
 
-    q_count = conn.execute("SELECT COUNT(*) AS n FROM questions").fetchone()["n"]
+    q_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM questions WHERE status!='pending'").fetchone()["n"]
 
     # 孩子在设备上按了"有件事想告诉爸妈"
     _notes = unseen_notes(conn)
