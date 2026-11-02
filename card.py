@@ -112,17 +112,24 @@ def sections(answer):
     return secs[:3]
 
 
-def render_card(question, answer, page=1, total=None):
-    """一页一个想法：第 1 页答案，第 2 页反问，第 3 页一起做。"""
+def render_card(question, answer, page=1, total=None, size=240):
+    """一页一个想法：第 1 页答案，第 2 页反问，第 3 页一起做。
+
+    size=240 是 1.28" 圆屏（DevKitC 方案）；size=360 是 1.85" 圆屏（Waveshare）。
+    所有排版按 240 设计，乘 k 适配。
+    """
+    k = size / 240.0
+    W = H = size
+    SAFE = int(round(26 * k))
     secs = sections(answer)
     total = total or len(secs)
     page = max(1, min(page, total))
     label, lines = secs[page - 1]
 
-    f_label = font(12)
-    f_q = font(18)
-    f_body = font(15)
-    f_sec = font(13)
+    f_label = font(int(round(12 * k)))
+    f_q = font(int(round(18 * k)))
+    f_body = font(int(round(15 * k)))
+    f_sec = font(int(round(13 * k)))
 
     max_w = W - SAFE * 2
     q_lines = wrap(question, f_q, max_w)[:2]
@@ -131,38 +138,40 @@ def render_card(question, answer, page=1, total=None):
     d = ImageDraw.Draw(img)
     d.ellipse([2, 2, W - 3, H - 3], fill=(20, 26, 34))
 
-    y = 26
+    y = int(round(26 * k))
     d.text((SAFE, y), "我的问题", font=f_label, fill=DIM)
-    d.text((W - SAFE - 34, y), "%d/%d" % (page, total), font=f_label, fill=DIM)
-    y += 20
+    d.text((W - SAFE - int(round(34 * k)), y), "%d/%d" % (page, total), font=f_label, fill=DIM)
+    y += int(round(20 * k))
 
     for ln in q_lines:
         d.text((SAFE, y), ln, font=f_q, fill=PINK)
-        y += 24
+        y += int(round(24 * k))
 
-    y += 6
+    y += int(round(6 * k))
     d.line([SAFE, y, W - SAFE, y], fill=(42, 49, 58), width=1)
-    y += 14
+    y += int(round(14 * k))
 
     d.text((SAFE, y), label, font=f_sec, fill=GOLD)
-    y += 22
+    y += int(round(22 * k))
 
-    bottom = H - 46
+    line_h = int(round(24 * k))
+    bottom = H - int(round(46 * k))
     wrapped = wrap(" ".join(lines), f_body, max_w)
     cut = False
     for ln in wrapped:
-        if y + 24 > bottom:
+        if y + line_h > bottom:
             cut = True
             break
         d.text((SAFE, y), ln, font=f_body, fill=FG)
-        y += 24
+        y += line_h
     if cut:
-        d.text((W - SAFE - 12, bottom - 16), "…", font=f_body, fill=DIM)
+        d.text((W - SAFE - int(round(12 * k)), bottom - int(round(16 * k))), "…",
+               font=f_body, fill=DIM)
 
     for i in range(total):
-        cx = int(W // 2 + (i - (total - 1) / 2) * 18)
+        cx = int(W // 2 + (i - (total - 1) / 2) * 18 * k)
         color = GOLD if i == page - 1 else (42, 49, 58)
-        d.ellipse([cx - 4, H - 30, cx + 4, H - 22], fill=color)
+        d.ellipse([cx - 4 * k, H - 30 * k, cx + 4 * k, H - 22 * k], fill=color)
 
     return img, total
 
@@ -193,49 +202,52 @@ if __name__ == "__main__":
 
 # ============================ 识字卡 ============================
 
-def render_zika(char, word, page=1, total=2):
+def render_zika(char, word, page=1, total=2, size=240):
     """识字卡：第 1 页看字形，第 2 页看在词语里的样子。
 
     5 岁半不要求会写、不要求会拼，只建立"字—音—义"和"字在词里"的联结。
     """
+    k = size / 240.0
+    W = H = size
+    SAFE = int(round(26 * k))
+
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
     d.ellipse([2, 2, W - 3, H - 3], fill=(20, 26, 34))
 
-    f_label = font(12)
-    d.text((SAFE, 26), "认一个字", font=f_label, fill=DIM)
-    d.text((W - SAFE - 34, 26), "%d/%d" % (page, total), font=f_label, fill=DIM)
+    f_label = font(int(round(12 * k)))
+    d.text((SAFE, int(round(26 * k))), "认一个字", font=f_label, fill=DIM)
+    d.text((W - SAFE - int(round(34 * k)), int(round(26 * k))), "%d/%d" % (page, total),
+           font=f_label, fill=DIM)
 
     if page == 1:
-        # 大字：撑满画面的字
-        f_big = font(128)
+        f_big = font(int(round(128 * k)))
         bbox = d.textbbox((0, 0), char, font=f_big)
         cw, ch = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        d.text(((W - cw) / 2 - bbox[0], 62 + (150 - ch) / 2 - bbox[1]),
-               char, font=f_big, fill=GOLD)
-        # 词例
-        f_w = font(17)
+        top = int(round(62 * k)) + (int(round(150 * k)) - ch) / 2
+        d.text(((W - cw) / 2 - bbox[0], top - bbox[1]), char, font=f_big, fill=GOLD)
+        f_w = font(int(round(17 * k)))
         wb = d.textbbox((0, 0), word, font=f_w)
-        d.text(((W - (wb[2] - wb[0])) / 2 - wb[0], 186),
+        d.text(((W - (wb[2] - wb[0])) / 2 - wb[0], int(round(186 * k))),
                word, font=f_w, fill=(160, 172, 186))
     else:
-        d.text((SAFE, 58), "这个词里有它", font=font(13), fill=DIM)
-        f_word = font(56)
-        # 逐字画，目标字高亮
+        d.text((SAFE, int(round(58 * k))), "这个词里有它", font=font(int(round(13 * k))), fill=DIM)
+        f_word = font(int(round(56 * k)))
         widths = [d.textlength(c, font=f_word) for c in word]
         total_w = sum(widths)
         x = (W - total_w) / 2
         for c, cwid in zip(word, widths):
-            d.text((x, 88), c, font=f_word, fill=GOLD if c == char else FG)
+            d.text((x, int(round(88 * k))), c, font=f_word, fill=GOLD if c == char else FG)
             x += cwid
-        d.line([SAFE + 24, 168, W - SAFE - 24, 168], fill=(42, 49, 58), width=1)
-        f_hint = font(14)
+        d.line([SAFE + 24 * k, 168 * k, W - SAFE - 24 * k, 168 * k], fill=(42, 49, 58), width=1)
+        f_hint = font(int(round(14 * k)))
         hint = "找一找：家里哪里有它？"
         hb = d.textbbox((0, 0), hint, font=f_hint)
-        d.text(((W - (hb[2] - hb[0])) / 2 - hb[0], 182), hint, font=f_hint, fill=GREEN)
+        d.text(((W - (hb[2] - hb[0])) / 2 - hb[0], int(round(182 * k))),
+               hint, font=f_hint, fill=GREEN)
 
     for i in range(total):
-        cx = int(W // 2 + (i - (total - 1) / 2) * 18)
+        cx = int(W // 2 + (i - (total - 1) / 2) * 18 * k)
         color = GOLD if i == page - 1 else (42, 49, 58)
-        d.ellipse([cx - 4, H - 30, cx + 4, H - 22], fill=color)
+        d.ellipse([cx - 4 * k, H - 30 * k, cx + 4 * k, H - 22 * k], fill=color)
     return img, total

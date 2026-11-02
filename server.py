@@ -558,13 +558,26 @@ def zika_of(idx):
     return None
 
 
-def card_pages(conn, qid=None):
+CARD_SIZES = (240, 360)
+
+
+def card_size(v):
+    """设备用 ?s= 指定分辨率；不认识就回落到 240。"""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return 240
+    return n if n in CARD_SIZES else 240
+
+
+def card_pages(conn, qid=None, size=None):
     """当前推送到设备的卡片：可能是一张问题卡，也可能是一张识字卡。"""
+    SZ = card_size(size)
     kind = get_setting(conn, "card_kind", "question")
     if kind == "zika":
         row = zika_of(get_setting(conn, "card_ref", ""))
         if row:
-            imgs = [cardrender.render_zika(row[0], row[1], pg)[0] for pg in (1, 2)]
+            imgs = [cardrender.render_zika(row[0], row[1], pg, size=SZ)[0] for pg in (1, 2)]
             return {"id": row[2], "question": row[0], "answer": row[1]}, imgs, 2
         set_setting(conn, "card_kind", "question")
         conn.commit()
@@ -573,7 +586,8 @@ def card_pages(conn, qid=None):
     if not q:
         return None, [], 0
     secs = cardrender.sections(q["answer"] or "")
-    imgs = [cardrender.render_card(q["question"], q["answer"] or "", i + 1, len(secs))[0]
+    imgs = [cardrender.render_card(q["question"], q["answer"] or "", i + 1, len(secs),
+                                   size=SZ)[0]
             for i in range(len(secs))]
     return q, imgs, len(imgs)
 
@@ -1730,7 +1744,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/card.png":
                 qid = self._int(q.get("id"))
                 idx = self._int(q.get("i"))
-                _q, imgs, n = card_pages(conn, qid or None)
+                _q, imgs, n = card_pages(conn, qid or None,
+                                         size=(q.get("s") or [None])[0])
                 if not imgs or idx >= len(imgs):
                     return self._send(404, "no card")
                 buf = io.BytesIO()
@@ -1740,7 +1755,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/card.rgb565":
                 qid = self._int(q.get("id"))
                 idx = self._int(q.get("i"))
-                _q, imgs, n = card_pages(conn, qid or None)
+                _q, imgs, n = card_pages(conn, qid or None,
+                                         size=(q.get("s") or [None])[0])
                 if not imgs or idx >= len(imgs):
                     return self._send(404, "no card", "text/plain")
                 raw = cardrender.to_rgb565(imgs[idx])   # 240*240*2 = 115200 字节

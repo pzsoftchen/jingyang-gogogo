@@ -1,6 +1,11 @@
 /*
- * 习惯伙伴 · 设备端固件（ESP32-S3 + GC9A01 圆屏 + DFPlayer + 两个按键）
+ * 习惯伙伴 · 设备端固件
  * ---------------------------------------------------------------
+ * v3：同一份固件支持两块板（改一行 BOARD 宏）：
+ *     - BOARD_DEVKITC_GC9A01 : 240×240 GC9A01(SPI) + DFPlayer + 两个按键（参考实现）
+ *     - BOARD_WS_1_85        : 360×360 ST77916(QSPI) + CST816 触摸 + PCM5101(I2S) + TF 卡
+ *     换板指南见 docs/board-porting.md
+ *
  * v2：习惯数量由家长页决定（1~4 件），设备通过 /api/state.txt 自动同步，
  *     不需要再改代码；断网时用 NVS 里缓存的习惯继续工作。
  *
@@ -39,25 +44,98 @@
 #define SERVER_PORT 8099
 #endif
 
+// ======================= 选板 =======================
+// BOARD_DEVKITC_GC9A01 : ESP32-S3 DevKitC-1 + GC9A01 1.28" 240×240（SPI，参考实现）
+// BOARD_WS_1_85         : Waveshare ESP32-S3-Touch-LCD-1.85（ST77916 QSPI 360×360
+//                         + CST816 电容触摸 + PCM5101 I2S + TF 卡 + RTC + 电池）
+#define BOARD_DEVKITC_GC9A01 0
+#define BOARD_WS_1_85        1
+
+#ifndef BOARD
+#define BOARD BOARD_DEVKITC_GC9A01
+#endif
+
 // ======================= 功能开关 =======================
-#define USE_DFPLAYER   1   // 接了 DFPlayer Mini 就设 1；没接设 0（用蜂鸣器代替）
 #define USE_WIFI       1   // 设 0 则完全离线
 #define ENABLE_REMIND  1   // 定时语音提醒
 
-// ======================= 引脚（避开 USB 19/20、Flash 26~32、PSRAM 33~37）=====
-#define TFT_SCK   12
-#define TFT_MOSI  11
-#define TFT_CS     9
-#define TFT_DC    10
-#define TFT_RST   18
-#define TFT_BL     7
+#if BOARD == BOARD_WS_1_85
+  #define USE_DFPLAYER   0
+  #define USE_TOUCH      1
+  #define USE_SD_AUDIO   1     // TF 卡 + I2S（需要 ESP32-audioI2S 库）
+  #define HAS_BUTTONS    0
+  #define SCREEN_W     360
+  #define SCREEN_H     360
+#else
+  #define USE_DFPLAYER   1
+  #define USE_TOUCH      0
+  #define USE_SD_AUDIO   0
+  #define HAS_BUTTONS    1
+  #define SCREEN_W     240
+  #define SCREEN_H     240
+#endif
 
-#define BTN_A      4      // 完成
-#define BTN_B      5      // 切换
-#define BUZZER     6
+// 布局缩放：所有绘图坐标以 240 为设计基准，乘这个系数适配 360
+#define UI_K ((float)SCREEN_W / 240.0f)
+#define K(v) ((int)((v) * UI_K))
 
-#define MP3_RX    16      // ESP32 接收 ← DFPlayer TX
-#define MP3_TX    17      // ESP32 发送 → DFPlayer RX（串 1k 电阻）
+// ======================= 引脚 =======================
+#if BOARD == BOARD_WS_1_85
+  // 屏幕 ST77916（QSPI）
+  #define LCD_SDA0  46
+  #define LCD_SDA1  45
+  #define LCD_SDA2  42
+  #define LCD_SDA3  41
+  #define LCD_SCK   40
+  #define LCD_CS    21
+  #define LCD_BL     5
+  #define LCD_RST_EXIO 2      // 挂在 TCA9554 的 P2 上，不是 GPIO
+  // 触摸 CST816（独立 I2C 总线）
+  #define TP_SDA     1
+  #define TP_SCL     3
+  #define TP_INT     4
+  #define TP_RST_EXIO 1       // TCA9554 P1
+  // 系统 I2C（TCA9554 / RTC / IMU 共用）
+  #define SYS_SDA   10
+  #define SYS_SCL   11
+  // I2S 音频（PCM5101 → 功放 → 喇叭）
+  #define I2S_BCK   48
+  #define I2S_LRCK  38
+  #define I2S_DIN   47
+  // TF 卡（SDMMC 1 线）
+  #define SD_CLK    14
+  #define SD_CMD    17
+  #define SD_D0     16
+  // 这块板没有用户按键（只有 RESET/BOOT），交互靠触摸
+  #define BTN_A     -1
+  #define BTN_B     -1
+  #define BUZZER    -1
+#else
+  #define TFT_SCK   12
+  #define TFT_MOSI  11
+  #define TFT_CS     9
+  #define TFT_DC    10
+  #define TFT_RST   18
+  #define TFT_BL     7
+  #define BTN_A      4
+  #define BTN_B      5
+  #define BUZZER     6
+  #define MP3_RX    16
+  #define MP3_TX    17
+#endif
+
+// ======================= 显示 =======================
+#if BOARD == BOARD_WS_1_85
+Arduino_DataBus *bus = new Arduino_ESP32QSPI(LCD_CS, LCD_SCK, LCD_SDA0, LCD_SDA1, LCD_SDA2, LCD_SDA3);
+Arduino_GFX *gfx = new Arduino_ST77916(bus, GFX_NOT_DEFINED /* RST 走 TCA9554 */, 0 /* rotation */,
+                                       true /* IPS */, SCREEN_W, SCREEN_H);
+#else
+Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, GFX_NOT_DEFINED);
+Arduino_GFX *gfx = new Arduino_GC9A01(bus, TFT_RST, 0, true);
+#endif
+Arduino_Canvas *canvas = nullptr;
+Arduino_GFX *ui = gfx;
+bool canvasOk = false;
 
 // ======================= 习惯（由服务器下发，最多 4 件）=======================
 #define MAX_HABITS 4
@@ -111,18 +189,17 @@ int seqN = 0, seqIdx = 0;
 #define C_TXT      0xC618
 #define C_ACCENT   0xFD20
 
-// ======================= 屏幕 =======================
-Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, GFX_NOT_DEFINED);
-Arduino_GFX *gfx = new Arduino_GC9A01(bus, TFT_RST, 0, true);
-Arduino_Canvas *canvas = nullptr;
-Arduino_GFX *ui = gfx;          // 统一切到这个指针上画
-bool canvasOk = false;
-
 // ======================= 语音 =======================
 #if USE_DFPLAYER
 #include <DFRobotDFPlayerMini.h>
 DFRobotDFPlayerMini mp3;
 bool mp3Ok = false;
+#endif
+
+#if USE_TOUCH
+#include <Wire.h>
+#define CST816_ADDR 0x15
+bool touchReady = false;
 #endif
 
 // ======================= 状态 =======================
@@ -142,18 +219,29 @@ String queue = "";           // 离线打卡队列："brush@2026-10-30;"
 bool postCheckin(const String &habit);
 void say(int track);
 
-// ======================= 蜂鸣器 / 语音 =======================
-// 兼容 ESP32 Arduino core 2.x 与 3.x 的 LEDC API（不依赖 tone()）
+// ======================= 音频 =======================
+#if USE_SD_AUDIO
+#include <SD_MMC.h>
+#if __has_include(<Audio.h>)
+#include <Audio.h>
+Audio audio;
+#endif
+#endif
+
+// 兼容 ESP32 Arduino core 2.x 与 3.x 的 LEDC API
 void buzzerInit() {
+#if BUZZER >= 0
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(BUZZER, 2000, 10);
 #else
   ledcSetup(0, 2000, 10);
   ledcAttachPin(BUZZER, 0);
 #endif
+#endif
 }
 
 void beep(uint16_t freq, uint16_t ms) {
+#if BUZZER >= 0
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWriteTone(BUZZER, freq); delay(ms);
   ledcWriteTone(BUZZER, 0);    ledcWrite(BUZZER, 0);
@@ -161,13 +249,53 @@ void beep(uint16_t freq, uint16_t ms) {
   ledcWriteTone(0, freq); delay(ms);
   ledcWriteTone(0, 0);    ledcWrite(0, 0);
 #endif
+#endif
 }
 
+#if USE_SD_AUDIO
+bool audioOk = false;
+
+// 1.85：TF 卡（SDMMC 1 线）+ PCM5101 I2S，播 /mp3/xxxx.mp3
+void audioInit() {
+#if __has_include(<Audio.h>)
+  SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
+  if (!SD_MMC.begin("/sdcard", true)) {
+    Serial.println("[audio] TF 卡挂载失败（确认卡是 FAT32，里面有 mp3/ 目录）");
+    return;
+  }
+  audio.setPinout(I2S_BCK, I2S_LRCK, I2S_DIN);
+  audio.setVolume(12);          // 0-21；孩子房间建议 8-12
+  audioOk = true;
+  Serial.println("[audio] TF + I2S OK");
+#else
+  Serial.println("[audio] 没装 ESP32-audioI2S 库，跳过");
+#endif
+}
+
+void audioLoop() {
+#if __has_include(<Audio.h>)
+  if (audioOk) audio.loop();
+#endif
+}
+#else
+void audioInit() {}
+void audioLoop() {}
+#endif
+
 void say(int track) {
-#if USE_DFPLAYER
+#if USE_SD_AUDIO
+#if __has_include(<Audio.h>)
+  if (audioOk && track > 0) {
+    char path[24];
+    snprintf(path, sizeof(path), "/mp3/%04d.mp3", track);
+    audio.connecttoFS(SD_MMC, path);
+    return;
+  }
+#endif
+#elif USE_DFPLAYER
   if (mp3Ok && track > 0) { mp3.play((uint16_t)track); return; }
 #endif
-  beep(1800, 70); delay(90); beep(2400, 70);   // 没有语音模块时的提示音
+  beep(1800, 70); delay(90); beep(2400, 70);
   (void)track;
 }
 
@@ -188,33 +316,39 @@ void startSeq(int idx) {
 void cancelSeq() { seqN = 0; seqIdx = 0; }
 
 // ======================= 绘制 =======================
+// 设计基准是 240×240，所有坐标乘 K() 适配 360×360
 void drawEyes(int mode) {
-  int lx = 88, rx = 152, ey = 92;
-  if (mode == 2) {                       // 闭眼
-    ui->drawLine(lx - 14, ey, lx + 14, ey, C_INK);
-    ui->drawLine(rx - 14, ey, rx + 14, ey, C_INK);
+  int lx = K(88), rx = K(152), ey = K(92);
+  int e = K(14), hi = K(4);
+  if (mode == 2) {
+    ui->drawLine(lx - e, ey, lx + e, ey, C_INK);
+    ui->drawLine(rx - e, ey, rx + e, ey, C_INK);
     return;
   }
-  if (mode == 1) {                       // 开心：^ ^
-    ui->drawLine(lx - 14, ey + 6, lx, ey - 8, C_INK);
-    ui->drawLine(lx, ey - 8, lx + 14, ey + 6, C_INK);
-    ui->drawLine(rx - 14, ey + 6, rx, ey - 8, C_INK);
-    ui->drawLine(rx, ey - 8, rx + 14, ey + 6, C_INK);
+  if (mode == 1) {
+    ui->drawLine(lx - e, ey + K(6), lx, ey - K(8), C_INK);
+    ui->drawLine(lx, ey - K(8), lx + e, ey + K(6), C_INK);
+    ui->drawLine(rx - e, ey + K(6), rx, ey - K(8), C_INK);
+    ui->drawLine(rx, ey - K(8), rx + e, ey + K(6), C_INK);
     return;
   }
-  ui->fillCircle(lx, ey, 12, C_INK);     // 圆眼 + 高光
-  ui->fillCircle(rx, ey, 12, C_INK);
-  ui->fillCircle(lx + 4, ey - 4, 4, C_FACE);
-  ui->fillCircle(rx + 4, ey - 4, 4, C_FACE);
+  ui->fillCircle(lx, ey, K(12), C_INK);
+  ui->fillCircle(rx, ey, K(12), C_INK);
+  ui->fillCircle(lx + hi, ey - hi, hi, C_FACE);
+  ui->fillCircle(rx + hi, ey - hi, hi, C_FACE);
 }
 
 void drawMouth(int mode) {
-  int cx = 120, my = 132;
-  if (mode == 1) { ui->fillCircle(cx, my, 20, C_INK); ui->fillCircle(cx, my - 8, 20, C_FACE); return; }
-  if (mode == 3) { ui->fillCircle(cx, my + 2, 8, C_INK); return; }
-  ui->drawLine(cx - 16, my, cx - 6, my + 7, C_INK);
-  ui->drawLine(cx - 6, my + 7, cx + 6, my + 7, C_INK);
-  ui->drawLine(cx + 6, my + 7, cx + 16, my, C_INK);
+  int cx = SCREEN_W / 2, my = K(132);
+  if (mode == 1) {
+    ui->fillCircle(cx, my, K(20), C_INK);
+    ui->fillCircle(cx, my - K(8), K(20), C_FACE);
+    return;
+  }
+  if (mode == 3) { ui->fillCircle(cx, my + K(2), K(8), C_INK); return; }
+  ui->drawLine(cx - K(16), my, cx - K(6), my + K(7), C_INK);
+  ui->drawLine(cx - K(6), my + K(7), cx + K(6), my + K(7), C_INK);
+  ui->drawLine(cx + K(6), my + K(7), cx + K(16), my, C_INK);
 }
 
 void drawStar(int cx, int cy, int r, bool filled, bool sel) {
@@ -230,7 +364,7 @@ void drawStar(int cx, int cy, int r, bool filled, bool sel) {
     ui->drawLine(px[i], py[i], px[j], py[j], filled ? C_STAR_ON : C_STAR_OFF);
   }
   if (filled) for (int i = 0; i < 10; i++) ui->drawLine(cx, cy, px[i], py[i], C_STAR_ON);
-  if (sel) ui->drawCircle(cx, cy, r + 7, C_ACCENT);
+  if (sel) ui->drawCircle(cx, cy, r + K(7), C_ACCENT);
 }
 
 void renderCard();   // 前置声明
@@ -244,32 +378,31 @@ int iconIndexOf(const String &id) {
 }
 
 void drawHabitIcon(int cx, int cy, const String &id, bool done, bool sel) {
-  // 底：一个深色圆，让图标有"卡片"的感觉
-  ui->fillCircle(cx, cy, 24, 0x10A2);
+  int rBg = K(24);
+  ui->fillCircle(cx, cy, rBg, 0x10A2);
 
   int idx = iconIndexOf(id);
   if (idx >= 0) {
     ui->draw16bitRGBBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2,
                            (const uint16_t *)HABIT_ICON_PIX[idx], HABIT_ICON_W, HABIT_ICON_H);
   } else {
-    drawStar(cx, cy, 16, done, false);      // 没配图标的习惯用星星兜底
+    drawStar(cx, cy, K(16), done, false);
   }
 
-  // 完成：金色环 + 对勾；未完成：暗环。孩子不需要读字，只要分得清"有没有金圈"
   if (done) {
-    ui->drawCircle(cx, cy, 24, C_STAR_ON);
-    ui->drawCircle(cx, cy, 23, C_STAR_ON);
-    ui->fillCircle(cx + 17, cy + 17, 8, C_STAR_ON);
-    ui->drawLine(cx + 13, cy + 17, cx + 16, cy + 21, C_INK);
-    ui->drawLine(cx + 16, cy + 21, cx + 21, cy + 13, C_INK);
+    ui->drawCircle(cx, cy, rBg, C_STAR_ON);
+    ui->drawCircle(cx, cy, rBg - 1, C_STAR_ON);
+    ui->fillCircle(cx + K(17), cy + K(17), K(8), C_STAR_ON);
+    ui->drawLine(cx + K(13), cy + K(17), cx + K(16), cy + K(21), C_INK);
+    ui->drawLine(cx + K(16), cy + K(21), cx + K(21), cy + K(13), C_INK);
   } else {
-    ui->drawCircle(cx, cy, 24, C_STAR_OFF);
+    ui->drawCircle(cx, cy, rBg, C_STAR_OFF);
   }
 
-  if (sel) ui->drawCircle(cx, cy, 29, C_ACCENT);
+  if (sel) ui->drawCircle(cx, cy, rBg + K(5), C_ACCENT);
 }
 
-// ---------- 庆祝动画：全部完成时放 1 秒 ----------
+// ---------- 庆祝动画 ----------
 void playCelebration() {
   const int N = 20;
   float ang[N], spd[N];
@@ -280,18 +413,19 @@ void playCelebration() {
     spd[i] = 1.0f + random(0, 100) / 70.0f;
     col[i] = palette[random(0, 5)];
   }
+  int cx = SCREEN_W / 2, cy = SCREEN_H / 2;
   for (int f = 0; f < 34; f++) {
     ui->fillScreen(C_BG);
     drawEyes(1);
     drawMouth(1);
     float t = f * 1.1f;
     for (int i = 0; i < N; i++) {
-      int r = (int)(12 + t * spd[i]);
-      if (r > 115) continue;
-      int x = 120 + (int)(cos(ang[i]) * r);
-      int y = 120 + (int)(sin(ang[i]) * r);
-      if (x < 6 || x > 234 || y < 6 || y > 234) continue;
-      ui->fillCircle(x, y, (f < 18) ? 4 : 2, col[i]);
+      int r = (int)(K(12) + t * spd[i] * UI_K);
+      if (r > K(115)) continue;
+      int x = cx + (int)(cos(ang[i]) * r);
+      int y = cy + (int)(sin(ang[i]) * r);
+      if (x < 6 || x > SCREEN_W - 6 || y < 6 || y > SCREEN_H - 6) continue;
+      ui->fillCircle(x, y, (f < 18) ? K(4) : K(2), col[i]);
     }
     if (canvasOk) canvas->flush();
     delay(28);
@@ -303,46 +437,46 @@ void render() {
   if (cardMode) { renderCard(); return; }
   ui->fillScreen(C_BG);
 
-  // 顶部：本周 7 个格子。5 岁半看不懂"连续 5 天"，但看得懂"格子填满"
-  int dw = 24, dx0 = 120 - 3 * dw;
+  // 顶部：本周 7 个格子
+  int dw = K(24), dx0 = SCREEN_W / 2 - 3 * dw, topY = K(34), dotR = K(9);
   for (int i = 0; i < 7; i++) {
     int x = dx0 + i * dw;
-    if (weekDone[i]) ui->fillCircle(x, 34, 9, C_STAR_ON);
-    else             ui->drawCircle(x, 34, 9, C_STAR_OFF);
+    if (weekDone[i]) ui->fillCircle(x, topY, dotR, C_STAR_ON);
+    else             ui->drawCircle(x, topY, dotR, C_STAR_OFF);
   }
-  ui->fillCircle(24, 34, 4, wifiOk ? 0x07E0 : 0x4208);   // 联网状态点
+  ui->fillCircle(K(24), topY, K(4), wifiOk ? 0x07E0 : 0x4208);
 
-  // 表情
   drawEyes(expr);
   drawMouth(expr);
 
-  // 今天要做的事：每个习惯一个 emoji 图标（不识字也能认出牙刷和玩具）
+  // 今天要做的事：每个习惯一个 emoji 图标
   if (habCount > 0) {
-    int gap = (habCount > 1) ? (200 / habCount) : 0;
-    int startX = 120 - (habCount - 1) * gap / 2;
+    int usable = SCREEN_W - 2 * K(34);
+    int gap = (habCount > 1) ? (usable / habCount) : 0;
+    int startX = SCREEN_W / 2 - (habCount - 1) * gap / 2;
     for (int i = 0; i < habCount; i++) {
-      drawHabitIcon(startX + i * gap, 176, hab[i].id, hab[i].done, (i == selected));
+      drawHabitIcon(startX + i * gap, K(176), hab[i].id, hab[i].done, (i == selected));
     }
   } else {
     ui->setTextColor(C_TXT);
     ui->setTextSize(2);
-    ui->setCursor(46, 172);
+    ui->setCursor(K(46), K(172));
     ui->print("SYNCING");
   }
 
-  // 计时进行中：底部一条进度条（孩子看得懂"还没满"）
+  // 计时进度条
   if (runIdx >= 0 && runDur > 0) {
-    int w = 160, x0 = 40, yb = 205;
-    ui->drawRect(x0, yb, w, 10, C_STAR_OFF);
+    int w = K(160), x0 = SCREEN_W / 2 - w / 2, yb = K(205), hb = K(10);
+    ui->drawRect(x0, yb, w, hb, C_STAR_OFF);
     unsigned long e = millis() - runStart;
     int f = (int)((e >= runDur) ? w - 2 : (e * (unsigned long)(w - 2)) / runDur);
-    if (f > 0) ui->fillRect(x0 + 1, yb + 1, f, 8, C_STAR_ON);
+    if (f > 0) ui->fillRect(x0 + 1, yb + 1, f, hb - 2, C_STAR_ON);
   }
 
   if (banner.length()) {
     ui->setTextSize(1);
     ui->setTextColor(C_ACCENT);
-    ui->setCursor(14, 222);
+    ui->setCursor(K(14), K(224));
     ui->print(banner);
   }
 
@@ -350,30 +484,31 @@ void render() {
   needRedraw = false;
 }
 
-// ---------- 问题卡 ----------
+// ---------- 问题卡 / 识字卡：服务器出图，设备只贴屏 ----------
 bool fetchCard(int idx) {
   if (!wifiOk) return false;
   if (!cardBuf) {
-    const size_t need = 240 * 240 * 2;   // 115200 字节，优先放 PSRAM
+    const size_t need = (size_t)SCREEN_W * SCREEN_H * 2;
     cardBuf = (uint16_t *)heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!cardBuf) cardBuf = (uint16_t *)heap_caps_malloc(need, MALLOC_CAP_8BIT);
     if (!cardBuf) { setBanner("NO MEM", 3000); return false; }
   }
   HTTPClient http;
   String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/api/card.rgb565?i=" + String(idx);
+               "/api/card.rgb565?i=" + String(idx) + "&s=" + String(SCREEN_W);
   http.begin(url);
-  http.setTimeout(6000);
+  http.setTimeout(8000);
   int code = http.GET();
   if (code != 200) { http.end(); return false; }
-  int len = http.getSize();
-  if (len != 240 * 240 * 2) { http.end(); return false; }
+  long len = (long)http.getSize();
+  const long want = (long)((size_t)SCREEN_W * SCREEN_H * 2);
+  if (len != want) { http.end(); return false; }
   WiFiClient *st = http.getStreamPtr();
   uint8_t *p = (uint8_t *)cardBuf;
-  int got = 0;
+  long got = 0;
   unsigned long t0 = millis();
-  while (got < len && millis() - t0 < 5000) {
-    int n = st->read(p + got, len - got);
+  while (got < len && millis() - t0 < 6000) {
+    int n = st->read(p + got, (size_t)(len - got));
     if (n > 0) got += n; else delay(1);
   }
   http.end();
@@ -383,10 +518,10 @@ bool fetchCard(int idx) {
 void renderCard() {
   if (!cardBuf) { cardMode = false; needRedraw = true; return; }
   if (canvasOk) {
-    memcpy(canvas->getFramebuffer(), cardBuf, 240 * 240 * 2);
+    memcpy(canvas->getFramebuffer(), cardBuf, (size_t)SCREEN_W * SCREEN_H * 2);
     canvas->flush();
   } else {
-    gfx->draw16bitRGBBitmap(0, 0, cardBuf, 240, 240);
+    gfx->draw16bitRGBBitmap(0, 0, cardBuf, SCREEN_W, SCREEN_H);
   }
   needRedraw = false;
 }
@@ -737,12 +872,86 @@ void completeHabit(int idx) {
   needRedraw = true;
 }
 
+// ======================= 1.85 专用：I/O 扩展器 + 触摸 =======================
+#if BOARD == BOARD_WS_1_85
+#define TCA9554_ADDR 0x20
+
+void tcaWrite(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(TCA9554_ADDR);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission();
+}
+
+uint8_t tcaRead(uint8_t reg) {
+  Wire.beginTransmission(TCA9554_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom((int)TCA9554_ADDR, 1);
+  return Wire.available() ? Wire.read() : 0xFF;
+}
+
+// LCD_RST=EXIO2 / TP_RST=EXIO1 / SD_CS=EXIO3 都挂在这颗扩展器上
+void tca9554Init() {
+  Wire.begin(SYS_SDA, SYS_SCL, 400000);
+  tcaWrite(0x03, 0b11110001);   // 配置：P1/P2/P3 输出，其余输入
+  tcaWrite(0x01, 0b00000000);   // 先把复位脚拉低
+  delay(20);
+  tcaWrite(0x01, 0b00001110);   // TP_RST / LCD_RST / SD_CS 拉高
+  delay(120);
+  Serial.printf("[tca9554] cfg=%02X out=%02X\n", tcaRead(0x03), tcaRead(0x01));
+}
+#endif
+
+#if USE_TOUCH
+bool touchHeld = false, touchLongFired = false;
+unsigned long touchDownAt = 0;
+
+void touchInit() {
+  Wire1.begin(TP_SDA, TP_SCL, 400000);
+  Wire1.beginTransmission(CST816_ADDR);
+  Wire1.write(0x00);
+  Wire1.endTransmission(false);
+  Wire1.requestFrom((int)CST816_ADDR, 1);
+  touchReady = Wire1.available();
+  Serial.printf("[touch] CST816 %s\n", touchReady ? "OK" : "未找到");
+}
+
+int touchGesture() {
+  if (!touchReady) return 0;
+  Wire1.beginTransmission(CST816_ADDR);
+  Wire1.write(0x01);
+  Wire1.endTransmission(false);
+  Wire1.requestFrom((int)CST816_ADDR, 1);
+  return Wire1.available() ? Wire1.read() : 0;
+}
+
+// 轻点 / 长按 → 映射成和按键一样的事件（0 无 / 1 短 / 2 长）
+int readTouch() {
+  int g = touchGesture();
+  bool now = (g != 0);
+  if (now && !touchHeld) {
+    touchHeld = true;
+    touchDownAt = millis();
+    touchLongFired = false;
+  } else if (now && !touchLongFired && millis() - touchDownAt > 900) {
+    touchLongFired = true;
+    return 2;
+  } else if (!now && touchHeld) {
+    touchHeld = false;
+    if (!touchLongFired) return 1;
+  }
+  return 0;
+}
+#endif
+
 // ======================= 按键 =======================
 struct Btn { uint8_t pin; bool last; unsigned long pressedAt; bool longFired; };
 Btn btnA = {BTN_A, HIGH, 0, false};
 Btn btnB = {BTN_B, HIGH, 0, false};
 
 int readBtn(Btn &b) {
+  if (b.pin < 0) return 0;             // 这块板没有按键
   bool cur = digitalRead(b.pin);
   int ev = 0;
   if (cur == LOW && b.last == HIGH) {                       // 按下
@@ -810,18 +1019,34 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
+#if HAS_BUTTONS
   pinMode(BTN_A, INPUT_PULLUP);
   pinMode(BTN_B, INPUT_PULLUP);
+#endif
+#if BUZZER >= 0
   pinMode(BUZZER, OUTPUT);
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
+#endif
   buzzerInit();
 
+#if BOARD == BOARD_WS_1_85
+  tca9554Init();                 // 必须先放 LCD_RST / TP_RST，否则屏不亮
+  pinMode(LCD_BL, OUTPUT);
+  digitalWrite(LCD_BL, HIGH);
+#else
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+#endif
+
   gfx->begin();
-  canvas = new Arduino_Canvas(240, 240, gfx);
+  canvas = new Arduino_Canvas(SCREEN_W, SCREEN_H, gfx);
   canvasOk = canvas->begin();
   ui = canvasOk ? (Arduino_GFX *)canvas : gfx;
   Serial.printf("[ui] canvas %s\n", canvasOk ? "OK" : "FAIL(直接写屏)");
+
+#if USE_TOUCH
+  touchInit();
+#endif
+  audioInit();
 
   loadState();
   rollDayIfNeeded();
@@ -853,9 +1078,19 @@ void loop() {
   static unsigned long lastDayCheck = 0;
   if (millis() - lastDayCheck > 5000) { lastDayCheck = millis(); rollDayIfNeeded(); }
 
-  // 2. 按键
+  // 2. 输入：按键（DevKitC）或触摸（1.85）
   int a = readBtn(btnA);
   int b = readBtn(btnB);
+#if USE_TOUCH
+  {
+    int t = readTouch();
+    if (t == 2) {                       // 长按
+      if (cardMode) a = 2; else b = 2;
+    } else if (t == 1) {                // 轻点
+      if (cardMode) b = 1; else a = 1;  // 卡片里轻点翻页；主界面轻点=完成
+    }
+  }
+#endif
 
   if (cardMode) {
     if (a == 1) {                       // A：退出卡片
@@ -945,7 +1180,8 @@ void loop() {
     if (expr == 0) { expr = 2; exprUntil = millis() + 130; needRedraw = true; }
   }
 
-  // 6. 串口
+  // 6. 音频泵（I2S 播放需要持续喂数据）+ 串口
+  audioLoop();
   handleSerial();
 
   // 7. 重绘

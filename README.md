@@ -242,7 +242,29 @@
 
 ---
 
-## 九、目录结构
+## 九、支持两块板（同一份固件）
+
+| | DevKitC + GC9A01 | Waveshare ESP32-S3-Touch-LCD-1.85 |
+|---|---|---|
+| 屏幕 | GC9A01 SPI 240×240 | ST77916 **QSPI 360×360** |
+| 交互 | 2 个实体按键 | **CST816 触摸**（轻点=完成，长按=切换） |
+| 语音 | DFPlayer | **PCM5101 I2S + 喇叭** |
+| 计时 | NTP（断网没提醒） | **RTC（断网也能提醒）** |
+| 成本 | ≈¥125 | ¥139 |
+
+改一行宏切换：
+
+```cpp
+#define BOARD BOARD_DEVKITC_GC9A01
+// #define BOARD BOARD_WS_1_85
+```
+
+卡片尺寸自动适配：固件按屏幕宽度请求 `?s=360`，服务端渲染 360×360（259200 字节），
+不认识的尺寸回落到 240。详见 [docs/board-porting.md](docs/board-porting.md)。
+
+---
+
+## 十、目录结构
 
 ```
 .
@@ -258,7 +280,7 @@
 
 ---
 
-## 十、快速开始
+## 十一、快速开始
 
 ```bash
 # 1. 起家长端（只需要 Python 3.9+）
@@ -285,12 +307,13 @@ python3 tools/gen_icons.py           # 改了 emoji 或加了新习惯
 
 ---
 
-## 十一、文档
+## 十二、文档
 
 | 文档 | 内容 |
 |---|---|
 | [docs/manual.md](docs/manual.md) | **操作手册**：接线、烧录、家长页、台词表、各模块细节、排错 |
 | [docs/hardware-bringup.md](docs/hardware-bringup.md) | 硬件清单 + 分步验收（一次只测一种硬件） |
+| [docs/board-porting.md](docs/board-porting.md) | **换板指南**：双板支持、1.85 引脚表、TCA9554 坑、未验证清单 |
 | [docs/habit-system.md](docs/habit-system.md) | **第一层**：习惯科学（66 天、过程性表扬、为什么不做奖励） |
 | [docs/aesthetic-order.md](docs/aesthetic-order.md) | **第三层**：秩序与美——自驱力的来源 |
 | [docs/self-consistency-review.md](docs/self-consistency-review.md) | **自洽审计**：原则 ↔ 实现的差距清单 + 修复记录 |
@@ -301,7 +324,7 @@ python3 tools/gen_icons.py           # 改了 emoji 或加了新习惯
 
 ---
 
-## 十二、做到哪了
+## 十三、做到哪了
 
 - ✅ **习惯**：1–4 件、流程化（一条流程一颗星，语音按分钟分步引导）、倒计时防随手按、离线队列
 - ✅ **问题罐**：户外记下 → AI 起草 → 家长审核 → 设备播报 + 卡片

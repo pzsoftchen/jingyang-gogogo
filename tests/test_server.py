@@ -337,6 +337,20 @@ class HttpTests(Base):
         self.assertEqual(code, 200)
         self.assertEqual(len(body), 240 * 240 * 2)
 
+
+    def test_card_size_360_for_185_board(self):
+        """1.85 寸屏要 360×360，字节数必须是 259200。"""
+        server.push_card(self.conn, "牙")
+        code, body = self.get("/api/card.rgb565?i=0&s=360")
+        self.assertEqual(code, 200)
+        self.assertEqual(len(body), 360 * 360 * 2)
+
+    def test_card_size_falls_back_to_240(self):
+        server.push_card(self.conn, "牙")
+        code, body = self.get("/api/card.rgb565?i=0&s=999")
+        self.assertEqual(code, 200)
+        self.assertEqual(len(body), 240 * 240 * 2)
+
     def test_png_endpoint(self):
         server.push_card(self.conn, "牙")
         code, body = self.get("/api/card.png?i=1")
