@@ -57,5 +57,38 @@ say_mp3 0038 "我不催你，你自己决定什么时候开始。"
 say_mp3 0039 "你做完没做完，妈妈都爱你。"
 say_mp3 0040 "明天我们继续，慢慢来。"
 
+# ---------- 0401~0420 彩蛋（完成时 7% 概率触发）----------
+say_mp3 0401 "我今天在你睡觉的时候，偷偷数了星星。"
+say_mp3 0402 "你知道吗，我最喜欢你叫我的名字。"
+say_mp3 0403 "我刚才打了个喷嚏，把自己吓了一跳。"
+say_mp3 0404 "我发现一个秘密：牙膏是甜的。"
+say_mp3 0405 "我今天学会了一个新动作，你看。"
+say_mp3 0406 "如果我能变成一只动物，我想变成一只熊。"
+say_mp3 0407 "你猜我今天看到什么？我看到一片叶子在转圈。"
+say_mp3 0408 "我数到三，你就长大一岁。一、二、三——我骗你的。"
+say_mp3 0409 "我今天有点困，但是我想等你。"
+say_mp3 0410 "你知道我怎么来的吗？我是被你的问题叫醒的。"
+say_mp3 0411 "我偷偷告诉你：我最怕打雷。"
+say_mp3 0412 "我今天给自己取了个外号，叫小豆豆侠。"
+say_mp3 0413 "你笑起来的时候，我的屏幕会变亮。"
+say_mp3 0414 "我昨天做了一个梦，梦见我们一起去海边。"
+say_mp3 0415 "我有一个小秘密，但是现在还不能说。"
+say_mp3 0416 "你今天有没有觉得，我有点不一样？"
+say_mp3 0417 "我给你唱首歌吧，啦啦啦——好了，唱完了。"
+say_mp3 0418 "我喜欢你按下我的时候，那个声音。"
+say_mp3 0419 "我哪儿也不去，就在这儿等你。"
+say_mp3 0420 "今天也是很好的一天，谢谢你陪我。"
+
+# ---------- 0501~0503 完成音效（1.85 走 I2S；DevKitC 用蜂鸣器）----------
+chime() {  # $1=文件名  $2=ffmpeg 参数  $3=滤镜
+  ffmpeg -y -loglevel error $2 -filter_complex "$3" -ar 22050 -ac 1 -b:a 32k "$1.mp3"
+}
+chime 0501 '-f lavfi -i sine=frequency=1320:duration=0.10 -f lavfi -i sine=frequency=1760:duration=0.12' \
+      '[0:a][1:a]concat=n=2:v=0:a=1,afade=t=out:st=0.16:d=0.06'
+chime 0502 '-f lavfi -i sine=frequency=1760:duration=0.08 -f lavfi -i sine=frequency=1320:duration=0.08 -f lavfi -i sine=frequency=1980:duration=0.12' \
+      '[0:a][1:a][2:a]concat=n=3:v=0:a=1,afade=t=out:st=0.22:d=0.06'
+chime 0503 '-f lavfi -i sine=frequency=990:duration=0.09 -f lavfi -i sine=frequency=1480:duration=0.14' \
+      '[0:a][1:a]concat=n=2:v=0:a=1,afade=t=out:st=0.17:d=0.06'
+
 rm -f tmp.aiff
 echo "完成：$(ls -1 *.mp3 | wc -l | tr -d ' ') 个文件，共 $(du -sh . | cut -f1)"

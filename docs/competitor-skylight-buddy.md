@@ -152,3 +152,81 @@ Verge 的抱怨很具体：**任务设到某天之后不能方便地移动日期
 | 全屏庆祝动画 | 成就感 | 无 | 无 | ✅ 做（小） |
 
 **四项都过准入五问，都可以进 P1。**
+
+---
+
+## 八、趣味与反馈：Buddy 最值得抄的四点
+
+> 这一节是看完 [Fast Company 的设计师访谈](https://fastcompanyme.com/co-design/meet-buddy-the-viral-device-helping-kids-and-parents-with-routines/)
+> 和 [WIRED 评测](https://www.wired.com/review/skylight-buddy/) 之后补的。
+> 结论：**Buddy 真正抓住孩子的不是"奖励"，是"庆祝"。**
+
+### 1. 完成整条流程时"下东西"，而且每次下的不一样
+
+Fast Company 原文（设计师 Nichole Rouillac）：
+
+> "When the child completes an individual task, they get a star. When they complete the full routine,
+> **they get a celebratory shower of stars**... In fact, sometimes, Buddy gives them **a shower of flamingos, or cats**,
+> which makes the experience even more fun."
+
+**这是全篇最重要的一句。** 他们没做更多奖励，他们做了**同一种庆祝的不同皮肤**：
+星星雨 → 火烈鸟雨 → 猫雨。成本极低，但"今天会下什么"成了每天的小期待。
+
+→ **我们抄了**：庆祝动画改成 4 种图案随机（星星 / 爱心 / emoji 图标 / 彩纸）。
+其中"图标雨"直接用习惯 emoji 图集当粒子，视觉上就是"下牙刷下小熊"。
+
+### 2. 孩子最喜欢的是"庆祝"本身，甚至超过任务
+
+WIRED 评测里最有说服力的一段（作者 4 岁的儿子）：
+
+> "His favorite part is clicking all the tasks as done and seeing **a shower of emojis (which change each time)** rain down...
+> He likes to activate that congratulatory feature **before he actually finishes**, just to see it.
+> Then he un-clicks the unfinished tasks so that he can make the emojis rain again upon actually finishing his list."
+
+孩子会为了"再看一次雨"，先把任务全点掉，再取消勾选，重新做一遍。
+
+**两个推论**：
+- 庆祝是产品里最强的"内容"，值得投入
+- 但它必须在"完成之后"触发，且**不能反复刷**（我们的设计天然满足：一次完成只触发一次）
+
+### 3. 年龄分层：小的不需要兑换，大的才需要
+
+> "Older kids can trade accumulated stars for a prize or a privilege...
+> **'My 4-year-old doesn't even understand that she can exchange the stars for anything,' she says.
+> 'She's just happy to get her stars.'**"
+
+这印证了我们的判断：**5 岁半不需要兑换机制**。星星本身就是奖励。
+兑换是 7 岁以后的选项，不是现在要做的。
+
+### 4. 刻意"低刺激"
+
+> "The graphics are really simple and low fidelity... **nothing flashy, no crazy animations,
+> there's nothing that's just really trying to suck their attention.**"
+
+这条常被忽略：给孩子做产品，**"不够炫"是设计目标，不是缺陷**。
+我们的庆祝动画控制在 1 秒左右、不搞 3D、不搞粒子爆炸——方向一致。
+
+### 还值得注意的两点（但我们现在做不了）
+
+**① 实体大按钮的"阻尼感"**
+
+设计师力排众议坚持加一个物理大按钮（软件团队想全触摸）：
+
+> "Kids gravitate toward tactile controls, like the **oversized horn buttons on toddler bikes**...
+> She designed the button to be **large enough** for small children still working on fine motor skills,
+> and created **enough resistance that it feels satisfying** to push down."
+
+**我们没有实体按键了**（1.85 是触摸），所以我在触摸里补了一层"按下即有反馈"：
+完成瞬间先播"叮"（不等语音），让孩子立刻感到因果。
+
+**② 两周就会腻，这是正常的**
+
+WIRED 原文："That excitement has stuck around for **almost two weeks** and counting."
+
+所以：**"孩子第 3 周开始不再兴奋"不是产品失败，是正常曲线。**
+对策不是加奖励，是**每周给一点新内容**（新彩蛋、新表情、新造型）。
+
+### 一句话
+
+> Buddy 的激励设计可以浓缩成一条：
+> **不要给更多奖励，要给同一种反馈的更多"皮肤"。**

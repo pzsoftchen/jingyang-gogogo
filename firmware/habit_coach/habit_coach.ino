@@ -179,6 +179,13 @@ int seqN = 0, seqIdx = 0;
 #define VOICE_TEACH_ME   11
 #define VOICE_THANKS     12
 #define VOICE_MSG_GENERIC 19
+#define VOICE_EGG_BASE   400   // 0401~0420 彩蛋语音（低概率触发）
+#define VOICE_EGG_COUNT   20
+#define EGG_CHANCE_PCT     7   // 完成时 % 概率说一句彩蛋
+
+// 表情档位（借鉴 Skylight Buddy 的"角色有情绪"）
+enum { EXPR_IDLE = 0, EXPR_HAPPY, EXPR_BLINK, EXPR_TALK, EXPR_SURPRISED,
+       EXPR_WINK, EXPR_SLEEPY, EXPR_CURIOUS };
 
 // ======================= 调色板 =======================
 #define C_BG       0x0861   // 深夜蓝黑
@@ -299,6 +306,19 @@ void say(int track) {
   (void)track;
 }
 
+// 完成音效：三种轮换，避免听觉疲劳
+// DevKitC 用蜂鸣器；1.85 播 0501~0503 的短音效（和语音走同一条 I2S）
+void playDoneChime() {
+  int v = random(0, 3);
+#if USE_SD_AUDIO
+  say(501 + v);
+#else
+  if (v == 0) { beep(1320, 60); delay(70); beep(1760, 90); }
+  else if (v == 1) { beep(1760, 60); delay(60); beep(1320, 60); delay(60); beep(1980, 90); }
+  else { beep(990, 70); delay(80); beep(1480, 110); }
+#endif
+}
+
 void happyFor(unsigned long ms = 2500)  { expr = 1; exprUntil = millis() + ms; needRedraw = true; }
 void talkFor(unsigned long ms = 2500)   { expr = 3; exprUntil = millis() + ms; needRedraw = true; }
 
@@ -320,12 +340,35 @@ void cancelSeq() { seqN = 0; seqIdx = 0; }
 void drawEyes(int mode) {
   int lx = K(88), rx = K(152), ey = K(92);
   int e = K(14), hi = K(4);
-  if (mode == 2) {
+  // 眨眼：一只闭一只圆
+  if (mode == EXPR_WINK) {
+    ui->drawLine(lx - e, ey, lx + e, ey, C_INK);
+    ui->fillCircle(rx, ey, K(12), C_INK);
+    ui->fillCircle(rx + hi, ey - hi, hi, C_FACE);
+    return;
+  }
+  // 好奇：一大一小
+  if (mode == EXPR_CURIOUS) {
+    ui->fillCircle(lx, ey, K(14), C_INK);
+    ui->fillCircle(rx, ey, K(8), C_INK);
+    ui->fillCircle(lx + hi, ey - hi, hi, C_FACE);
+    ui->fillCircle(rx + K(2), ey - K(2), K(3), C_FACE);
+    return;
+  }
+  // 惊讶：更大的圆眼 + 高光偏上
+  if (mode == EXPR_SURPRISED) {
+    ui->fillCircle(lx, ey, K(15), C_INK);
+    ui->fillCircle(rx, ey, K(15), C_INK);
+    ui->fillCircle(lx + hi, ey - K(6), hi, C_FACE);
+    ui->fillCircle(rx + hi, ey - K(6), hi, C_FACE);
+    return;
+  }
+  if (mode == 2 || mode == EXPR_SLEEPY) {
     ui->drawLine(lx - e, ey, lx + e, ey, C_INK);
     ui->drawLine(rx - e, ey, rx + e, ey, C_INK);
     return;
   }
-  if (mode == 1) {
+  if (mode == 1 || mode == EXPR_HAPPY) {
     ui->drawLine(lx - e, ey + K(6), lx, ey - K(8), C_INK);
     ui->drawLine(lx, ey - K(8), lx + e, ey + K(6), C_INK);
     ui->drawLine(rx - e, ey + K(6), rx, ey - K(8), C_INK);
@@ -340,7 +383,25 @@ void drawEyes(int mode) {
 
 void drawMouth(int mode) {
   int cx = SCREEN_W / 2, my = K(132);
-  if (mode == 1) {
+  // 惊讶：小圆嘴
+  if (mode == EXPR_SURPRISED) { ui->fillCircle(cx, my + K(2), K(9), C_INK); return; }
+  // 好奇：歪嘴
+  if (mode == EXPR_CURIOUS) {
+    ui->drawLine(cx - K(10), my + K(4), cx + K(2), my - K(2), C_INK);
+    ui->drawLine(cx + K(2), my - K(2), cx + K(13), my + K(3), C_INK);
+    return;
+  }
+  // 困：小弧 + zz
+  if (mode == EXPR_SLEEPY) {
+    ui->drawLine(cx - K(8), my + K(3), cx, my - K(2), C_INK);
+    ui->drawLine(cx, my - K(2), cx + K(8), my + K(3), C_INK);
+    ui->setTextColor(C_ACCENT);
+    ui->setTextSize(1);
+    ui->setCursor(cx + K(28), my - K(26));
+    ui->print("z z");
+    return;
+  }
+  if (mode == 1 || mode == EXPR_HAPPY) {
     ui->fillCircle(cx, my, K(20), C_INK);
     ui->fillCircle(cx, my - K(8), K(20), C_FACE);
     return;
@@ -402,33 +463,64 @@ void drawHabitIcon(int cx, int cy, const String &id, bool done, bool sel) {
   if (sel) ui->drawCircle(cx, cy, rBg + K(5), C_ACCENT);
 }
 
-// ---------- 庆祝动画 ----------
-void playCelebration() {
-  const int N = 20;
-  float ang[N], spd[N];
+// ---------- 庆祝动画：4 种图案轮换 ----------
+// 借鉴 Skylight Buddy：完成整条流程时"下星星雨"，有时换成别的东西（他们换成火烈鸟、猫）。
+// 这里用同样的机制：星星 / 爱心 / 随机 emoji 图标 / 彩纸。
+void drawHeart(int cx, int cy, int r, uint16_t col) {
+  ui->fillCircle(cx - r / 2, cy - r / 3, r * 2 / 3, col);
+  ui->fillCircle(cx + r / 2, cy - r / 3, r * 2 / 3, col);
+  int px[3] = {cx - r, cy - r / 4};
+  int py[3] = {cx, cy + r * 3 / 4};
+  // 用折线近似三角
+  ui->drawLine(cx - r, cy - r / 4, cx, cy + r * 3 / 4, col);
+  ui->drawLine(cx, cy + r * 3 / 4, cx + r, cy - r / 4, col);
+  ui->fillCircle(cx, cy + r / 8, r * 3 / 5, col);
+  (void)px; (void)py;
+}
+
+void playCelebration(int kind) {
+  // kind: 0 星星雨 1 爱心雨 2 emoji 图标雨 3 彩纸
+  const int N = 16;
+  int px[N], py[N], spd[N], rot[N];
   uint16_t col[N];
   const uint16_t palette[5] = {C_STAR_ON, 0xFE60, 0xFD20, 0x07FF, 0xF81F};
+  int w = SCREEN_W, h = SCREEN_H;
   for (int i = 0; i < N; i++) {
-    ang[i] = random(0, 628) / 100.0f;
-    spd[i] = 1.0f + random(0, 100) / 70.0f;
+    px[i] = random(K(16), w - K(16));
+    py[i] = -random(0, h / 2);          // 错开出场
+    spd[i] = random(K(6), K(14));
+    rot[i] = random(0, 3);
     col[i] = palette[random(0, 5)];
   }
-  int cx = SCREEN_W / 2, cy = SCREEN_H / 2;
-  for (int f = 0; f < 34; f++) {
+  int iconPool[4];
+  for (int i = 0; i < 4; i++) iconPool[i] = random(0, HABIT_ICON_COUNT);
+
+  for (int f = 0; f < 42; f++) {
     ui->fillScreen(C_BG);
-    drawEyes(1);
-    drawMouth(1);
-    float t = f * 1.1f;
+    drawEyes(EXPR_HAPPY);
+    drawMouth(EXPR_HAPPY);
     for (int i = 0; i < N; i++) {
-      int r = (int)(K(12) + t * spd[i] * UI_K);
-      if (r > K(115)) continue;
-      int x = cx + (int)(cos(ang[i]) * r);
-      int y = cy + (int)(sin(ang[i]) * r);
-      if (x < 6 || x > SCREEN_W - 6 || y < 6 || y > SCREEN_H - 6) continue;
-      ui->fillCircle(x, y, (f < 18) ? K(4) : K(2), col[i]);
+      int y = py[i] + f * spd[i];
+      int x = px[i] + (int)(sin((f + i * 7) / 6.0f) * K(6));
+      if (y < 0 || y > h) continue;
+      if (kind == 0) {
+        drawStar(x, y, K(9), true, false);
+      } else if (kind == 1) {
+        drawHeart(x, y, K(9), col[i]);
+      } else if (kind == 2) {
+        int idx = iconPool[i % 4];
+        if (y > K(HABIT_ICON_H / 2) && y < h - K(HABIT_ICON_H / 2)) {
+          ui->draw16bitRGBBitmap(x - HABIT_ICON_W / 2, y - HABIT_ICON_H / 2,
+                                 (const uint16_t *)HABIT_ICON_PIX[idx],
+                                 HABIT_ICON_W, HABIT_ICON_H);
+        }
+      } else {
+        int s2 = K(6);
+        ui->fillRect(x, y, s2, s2 + (f % 3) * K(2), col[i]);
+      }
     }
     if (canvasOk) canvas->flush();
-    delay(28);
+    delay(30);
   }
   needRedraw = true;
 }
@@ -844,7 +936,14 @@ void completeHabit(int idx) {
   runIdx = -1;                 // 清掉计时状态
 
   // 本地先给反馈，再管网络（保证断网也不掉体验）
-  say(hab[idx].dt);
+  playDoneChime();                       // 立刻"叮"：确认收到
+  happyFor(3000);
+  if (random(0, 100) < EGG_CHANCE_PCT) { // 低概率：小豆豆说一句自己的事
+    delay(350);
+    say(VOICE_EGG_BASE + random(1, VOICE_EGG_COUNT + 1));
+  } else {
+    say(hab[idx].dt);
+  }
 
   if (wifiOk) { if (!postCheckin(hab[idx].id)) queueCheckin(idx); }
   else queueCheckin(idx);
@@ -855,7 +954,7 @@ void completeHabit(int idx) {
     say(VOICE_ALL_DONE);
     happyFor(6000);
     setBanner("ALL DONE!", 6000);
-    playCelebration();
+    playCelebration(random(0, 4));      // 星星雨 / 爱心雨 / 图标雨 / 彩纸，随机
   } else if (doneCount() == habCount - 1) {
     delay(1200);
     say(VOICE_ONE_LEFT);
