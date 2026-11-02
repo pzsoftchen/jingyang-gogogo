@@ -369,6 +369,49 @@ class HttpTests(Base):
             self.assertEqual(r.status, 200)      # 跟随了 303
         self.assertEqual(len(server.get_habits(self.conn)), 2, "超过 4 件应保持原样")
 
+    def test_quick_page_and_post(self):
+        code, body = self.get("/quick")
+        self.assertEqual(code, 200)
+        self.assertIn("记一个问题", body.decode("utf-8"))
+        import urllib.parse
+        data = urllib.parse.urlencode({"question": "为什么天是蓝的"}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/quick" % HttpTests.port, data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            self.assertEqual(r.status, 200)
+        row = self.conn.execute(
+            "SELECT question FROM questions ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(row["question"], "为什么天是蓝的")
+
+    def test_device_can_record_pending_question(self):
+        code, _ = self.post("/api/question_quick")
+        self.assertEqual(code, 200)
+        pend = server.pending_questions_to_fill(self.conn)
+        self.assertEqual(len(pend), 1)
+        # 页面上应出现"待补内容"
+        _c, body = self.get("/")
+        self.assertIn("待补内容", body.decode("utf-8"))
+
+    def test_fill_pending_question(self):
+        server.add_question_pending(self.conn, "动物")
+        pend = server.pending_questions_to_fill(self.conn)
+        qid = pend[0]["id"]
+        ok = server.fill_pending_question(self.conn, qid, "为什么猫会呼噜")
+        self.assertTrue(ok)
+        self.assertEqual(server.pending_questions_to_fill(self.conn), [])
+        row = self.conn.execute("SELECT status,question FROM questions WHERE id=?",
+                                (qid,)).fetchone()
+        self.assertEqual(row["status"], "ask")
+
+    def test_child_note_banner(self):
+        code, _ = self.post("/api/child_note")
+        self.assertEqual(code, 200)
+        _c, body = self.get("/")
+        self.assertIn("有件事想跟你说", body.decode("utf-8"))
+        self.post("/parent/notes_seen")
+        _c2, body2 = self.get("/")
+        self.assertNotIn("有件事想跟你说", body2.decode("utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

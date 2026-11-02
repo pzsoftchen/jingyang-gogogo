@@ -163,6 +163,10 @@ bool  cardPending = false;
 int   cardN = 0, cardIdx = 0;
 uint16_t *cardBuf = nullptr;
 
+// 二选一时刻：完成全部后，偶尔让小豆豆问一句"你想看我跳舞还是听秘密"
+bool choiceMode = false;
+unsigned long choiceUntil = 0;
+
 // "按下 → 计时 → 才点亮"（防止随手按）
 int runIdx = -1;
 unsigned long runStart = 0, runDur = 0, lastBarMs = 0;
@@ -182,6 +186,12 @@ int seqN = 0, seqIdx = 0;
 #define VOICE_EGG_BASE   400   // 0401~0420 彩蛋语音（低概率触发）
 #define VOICE_EGG_COUNT   20
 #define EGG_CHANCE_PCT     7   // 完成时 % 概率说一句彩蛋
+#define VOICE_Q_SAVED     65   // 「这个问题真好，我们记下来」
+#define VOICE_TELL_PARENTS 70  // 「好，我记住了。晚上记得告诉爸爸妈妈」
+#define VOICE_CHOICE_Q   601   // 二选一：跳舞还是秘密
+#define VOICE_CHOICE_A   602   // 跳舞
+#define VOICE_CHOICE_B   603   // 秘密
+#define CHOICE_CHANCE_PCT 20   // 完成全部后出现二选一时刻的概率
 
 // 表情档位（借鉴 Skylight Buddy 的"角色有情绪"）
 enum { EXPR_IDLE = 0, EXPR_HAPPY, EXPR_BLINK, EXPR_TALK, EXPR_SURPRISED,
@@ -224,6 +234,7 @@ String queue = "";           // 离线打卡队列："brush@2026-10-30;"
 
 // 前置声明
 bool postCheckin(const String &habit);
+void postPath(const String &path);
 void say(int track);
 
 // ======================= 音频 =======================
@@ -766,6 +777,18 @@ void queueCheckin(int idx) {
   saveState();
 }
 
+// 极轻量的 POST：设备只报"发生了一件事"，内容由家长补
+void postPath(const String &path) {
+  if (!wifiOk) return;                    // 断网就只是没记上，不打扰孩子
+  HTTPClient http;
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + path;
+  http.begin(url);
+  http.setTimeout(4000);
+  http.addHeader("Content-Type", "text/plain");
+  http.POST("");
+  http.end();
+}
+
 bool postCheckin(const String &habit) {
   if (!wifiOk) return false;
   HTTPClient http;
@@ -938,9 +961,14 @@ void completeHabit(int idx) {
   // 本地先给反馈，再管网络（保证断网也不掉体验）
   playDoneChime();                       // 立刻"叮"：确认收到
   happyFor(3000);
-  if (random(0, 100) < EGG_CHANCE_PCT) { // 低概率：小豆豆说一句自己的事
+  int r = random(0, 100);
+  if (r < EGG_CHANCE_PCT) {              // 低概率：小豆豆说一句自己的事
     delay(350);
     say(VOICE_EGG_BASE + random(1, VOICE_EGG_COUNT + 1));
+  } else if (r < EGG_CHANCE_PCT + 4) {   // 更低概率：角色示弱，让他来"教"
+    delay(350);
+    say(VOICE_TEACH_ME);                 // 0011「你教教我嘛」
+    talkFor(4000);
   } else {
     say(hab[idx].dt);
   }
@@ -955,6 +983,14 @@ void completeHabit(int idx) {
     happyFor(6000);
     setBanner("ALL DONE!", 6000);
     playCelebration(random(0, 4));      // 星星雨 / 爱心雨 / 图标雨 / 彩纸，随机
+    if (random(0, 100) < CHOICE_CHANCE_PCT) {
+      delay(700);
+      say(VOICE_CHOICE_Q);
+      choiceMode = true;
+      choiceUntil = millis() + 15000;
+      setBanner("A跳舞 B秘密", 12000);
+      needRedraw = true;
+    }
   } else if (doneCount() == habCount - 1) {
     delay(1200);
     say(VOICE_ONE_LEFT);
@@ -1177,7 +1213,25 @@ void loop() {
   static unsigned long lastDayCheck = 0;
   if (millis() - lastDayCheck > 5000) { lastDayCheck = millis(); rollDayIfNeeded(); }
 
-  // 2. 输入：按键（DevKitC）或触摸（1.85）
+  // 2a. 二选一时刻（优先级最高，吃掉其它输入）
+  if (choiceMode) {
+    if (millis() > choiceUntil) { choiceMode = false; needRedraw = true; }
+    else if (a == 1) {                 // 跳舞
+      choiceMode = false;
+      say(VOICE_CHOICE_A);
+      playCelebration(random(0, 4));
+    } else if (b == 1) {               // 听秘密
+      choiceMode = false;
+      say(VOICE_CHOICE_B);
+      delay(1500);
+      say(VOICE_EGG_BASE + random(1, VOICE_EGG_COUNT + 1));
+    }
+    if (choiceMode == false) { needRedraw = true; }
+    delay(20);
+    return;
+  }
+
+  // 2b. 输入：按键（DevKitC）或触摸（1.85）
   int a = readBtn(btnA);
   int b = readBtn(btnB);
 #if USE_TOUCH
@@ -1207,10 +1261,19 @@ void loop() {
     needRedraw = true;
     beep(1200, 40);
   }
-  if (a == 2) {                       // 长按 A：你教教我（角色示弱）
-    say(VOICE_TEACH_ME);
-    talkFor(4000);
-    setBanner("TEACH ME", 4000);
+  if (a == 2) {                       // 长按：记录
+    // 全部做完了 → 给爸妈留句话；否则 → 记一个问题
+    if (habCount > 0 && allDone()) {
+      say(VOICE_TELL_PARENTS);
+      postPath("/api/child_note");
+      talkFor(4000);
+      setBanner("告诉爸妈了", 4000);
+    } else {
+      say(VOICE_Q_SAVED);
+      postPath("/api/question_quick");
+      talkFor(4000);
+      setBanner("记下来了", 4000);
+    }
   }
   if (a == 1) {
     if (runIdx >= 0) {                       // 计时中再按 = 取消

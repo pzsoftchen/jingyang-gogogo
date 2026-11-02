@@ -222,6 +222,12 @@ def init_db():
             key   TEXT PRIMARY KEY,
             value TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS notes(
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind    TEXT DEFAULT 'child_note',   -- child_note：孩子有件事想告诉爸妈
+            created TEXT NOT NULL,
+            seen    INTEGER DEFAULT 0
+        );
         CREATE TABLE IF NOT EXISTS pushes(
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
             day  TEXT NOT NULL,
@@ -268,6 +274,8 @@ def init_db():
     if "kind" not in cols:
         conn.execute("ALTER TABLE approvals ADD COLUMN kind TEXT DEFAULT 'praise'")
     qcols = {r["name"] for r in conn.execute("PRAGMA table_info(questions)")}
+    if qcols and "category" not in qcols:
+        conn.execute("ALTER TABLE questions ADD COLUMN category TEXT DEFAULT ''")
     if qcols and "announced" not in qcols:
         conn.execute("ALTER TABLE questions ADD COLUMN announced INTEGER DEFAULT 0")
     # 默认设置
@@ -506,6 +514,59 @@ def ask_ai(question):
         return data["choices"][0]["message"]["content"].strip(), ""
     except Exception as e:  # 网络/额度/key 错误都走这里
         return None, "调用失败：%s" % str(e)[:120]
+
+
+def add_question_pending(conn, category=""):
+    """设备端"记一个问题"：先占个位，内容回家让家长补。
+
+    设备没有麦克风（红线），所以它记不下"问题是什么"，
+    但它能抓住"他刚刚问了一个问题"这个时刻——这是最容易被忘掉的部分。
+    """
+    conn.execute(
+        "INSERT INTO questions(question,from_who,status,created,category)"
+        " VALUES('',?,'pending',?,?)",
+        ("孩子", now_iso(), category[:20]),
+    )
+    conn.commit()
+    return True
+
+
+def pending_questions_to_fill(conn, limit=10):
+    rows = conn.execute(
+        "SELECT id,created,category FROM questions WHERE status='pending'"
+        " ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def fill_pending_question(conn, qid, question):
+    """家长把待补的问题内容填上。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    conn.execute(
+        "UPDATE questions SET question=?, status='ask' WHERE id=?", (q[:300], qid))
+    conn.commit()
+    return True
+
+
+def add_child_note(conn):
+    """孩子按下"有件事想告诉爸妈"——设备只记事件，内容由家长当面问。"""
+    conn.execute("INSERT INTO notes(created) VALUES(?)", (now_iso(),))
+    conn.commit()
+    return True
+
+
+def unseen_notes(conn, limit=5):
+    rows = conn.execute(
+        "SELECT id,created FROM notes WHERE seen=0 ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_notes_seen(conn):
+    conn.execute("UPDATE notes SET seen=1 WHERE seen=0")
+    conn.commit()
 
 
 def add_question(conn, question, from_who="孩子"):
@@ -997,6 +1058,46 @@ def album_data(conn):
     }
 
 
+QUICK_HTML = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>记一个问题</title><style>
+*{box-sizing:border-box}
+body{margin:0;background:#111418;color:#e8edf3;font:16px/1.6 -apple-system,"PingFang SC",sans-serif}
+.w{max-width:520px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:20px;margin:4px 0 6px}
+.sub{color:#8b97a6;font-size:13px}
+form{margin-top:16px}
+input{width:100%%;font-size:20px;padding:16px;border-radius:14px;border:1px solid #2a313a;
+      background:#12171d;color:#e8edf3}
+input:focus{outline:2px solid #ff6b9d}
+button{width:100%%;margin-top:12px;padding:16px;font-size:18px;font-weight:700;
+       border:0;border-radius:14px;background:#ff6b9d;color:#2a0616}
+.hint{color:#8b97a6;font-size:13px;margin-top:10px;line-height:1.7}
+h2{font-size:14px;color:#8b97a6;margin:28px 0 8px;font-weight:normal}
+.item{background:#12171d;border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
+.item span{color:#8b97a6;font-size:12px;display:block}
+a{color:#ff6b9d}
+</style></head><body><div class="w">
+<h1>记一个问题</h1>
+<div class="sub">他说了什么？记下来，回家一起找答案。</div>
+<form method="post" action="/quick">
+  <input id="q" name="question" maxlength="200" autofocus autocomplete="off"
+         placeholder="为什么树叶会变黄" enterkeyhint="done">
+  <button type="submit">记下来</button>
+</form>
+<div class="hint">
+  💡 最快的方式：点输入框 → 键盘右下角的**麦克风**说一句 → 点"记下来"。<br>
+  💡 想零摩擦：把它加到手机主屏幕（Safari → 分享 → 添加到主屏幕）。
+</div>
+<h2>今天的</h2>
+{{RECENT}}
+<div class="hint" style="margin-top:24px">
+  {{PENDING}}<br>
+  <a href="/">← 回家长页</a>
+</div>
+</div></body></html>"""
+
+
 ALBUM_CSS = """
 :root{--ink:#111;--dim:#777;--line:#ddd;--gold:#b8860b}
 *{box-sizing:border-box}
@@ -1315,6 +1416,8 @@ PAGE = """<!doctype html>
   <h1>{{CHILD}}</h1>
   <div class="sub">今天 {{DAY}} · {{STAGENAME}} · 每天最多推 {{BUDGET}} 次内容</div>
 
+  {{NOTEBANNER}}
+
   <!-- ================= 1. 今天的惊喜（一天只有一个） ================= -->
   <div class="card">
     <div class="sub" style="margin:0 0 8px">今天的惊喜 · 一天只有一个</div>
@@ -1347,6 +1450,7 @@ PAGE = """<!doctype html>
         <input type="text" name="question" placeholder="在公园问了什么？比如「为什么树叶会变黄」" maxlength="200">
         <button class="send" type="submit">记下来</button>
       </form>
+      <div style="margin-top:6px">{{PENDINGQ}}</div>
       <div style="margin-top:6px">{{QUESTIONS}}</div>
       {{CARDS}}
     </div>
@@ -1572,6 +1676,37 @@ def render_page(conn, sent=""):
 
     q_count = conn.execute("SELECT COUNT(*) AS n FROM questions").fetchone()["n"]
 
+    # 孩子在设备上按了"有件事想告诉爸妈"
+    _notes = unseen_notes(conn)
+    if _notes:
+        note_banner = (
+            '<div class="card" style="border-left:3px solid var(--pink)">'
+            '<div style="font-size:15px">💬 %s 有件事想跟你说</div>'
+            '<div class="sub" style="margin:6px 0 10px">他在设备上按了「告诉爸妈」。'
+            '设备不知道内容——去问问他吧，那才是重点。</div>'
+            '<form method="post" action="/parent/notes_seen">'
+            '<div class="qbtns"><button type="submit">我知道了</button></div></form></div>'
+            % s["child_name"]
+        )
+    else:
+        note_banner = ""
+
+    # 待补内容的问题（设备上按过"记一个问题"）
+    _pending = pending_questions_to_fill(conn)
+    if _pending:
+        rows = []
+        for q in _pending:
+            rows.append(
+                '<div class="q"><div class="qqt">⏳ 待补内容 · %s</div>'
+                '<form method="post" action="/parent/fill">'
+                '<input type="hidden" name="id" value="%d">'
+                '<input type="text" name="question" placeholder="他刚才问了什么？" maxlength="200">'
+                '<div class="qbtns"><button type="submit">补上</button></div>'
+                '</form></div>' % (q["created"][5:16], q["id"]))
+        pending_html = "".join(rows)
+    else:
+        pending_html = ""
+
     zika_map = " · ".join(
         "%s→%s" % (preset_of(hid)[1] if preset_of(hid) else hid, ch)
         for hid, ch in HABIT_ZIKA.items()
@@ -1661,6 +1796,8 @@ def render_page(conn, sent=""):
         "{{ZIKA}}": zika_html,
         "{{SURPRISE}}": surprise_html,
         "{{QCOUNT}}": str(q_count),
+        "{{NOTEBANNER}}": note_banner,
+        "{{PENDINGQ}}": pending_html,
         "{{ZIKAMAP}}": zika_map,
         "{{REVIEWSUM}}": review_sum,
         "{{REVIEWLIST}}": review_list,
@@ -1723,6 +1860,8 @@ class Handler(BaseHTTPRequestHandler):
                     "hab0": "⚠️ 至少要开 1 件。",
                     "revoked": "↩️ 已撤回该记录（只在家长页留痕，设备端不会提示孩子）",
                     "qadd": "✅ 记下了。回家再一起找答案——别在路上就给答案，先问问他怎么想。",
+                    "qfill": "✅ 问题补上了，现在可以让 AI 起草答案。",
+                    "nseen": "✅ 已标记为已读。",
                     "qai": "🤖 AI 写了一版草稿，改完再点「保存并在设备播报」。",
                     "qai_no": "⚠️ 没配置 AI 的 API Key，先自己写吧（或看 README 里怎么配）。",
                     "qans": "✅ 答案已保存，设备下次同步会提醒他「一起看看答案」。",
@@ -1737,6 +1876,24 @@ class Handler(BaseHTTPRequestHandler):
                     "zika": "📖 已推到设备：先念这个字，屏幕上出现字卡（B 翻页，A 退出）。一天一个，明天先复习。",
                 }.get(code, "")
                 return self._send(200, render_page(conn, sent), "text/html; charset=utf-8")
+
+            if path == "/quick":
+                if self.command == "POST":
+                    form = self._form()
+                    add_question(conn, (form.get("question") or [""])[0])
+                    return self._send(303, "", headers={"Location": "/quick"})
+                rows = conn.execute(
+                    "SELECT question,created FROM questions WHERE status!='pending'"
+                    " ORDER BY id DESC LIMIT 5").fetchall()
+                recent = "".join(
+                    '<div class="item">%s<span>%s</span></div>'
+                    % (r["question"], r["created"][5:16]) for r in rows
+                ) or '<div class="sub">还没有。</div>'
+                n_pending = len(pending_questions_to_fill(conn))
+                pend = ("设备上记了 %d 个还没补内容 → <a href='/#q'>去补</a>" % n_pending) if n_pending else ""
+                return self._send(200,
+                    QUICK_HTML.replace("{{RECENT}}", recent).replace("{{PENDING}}", pend),
+                    "text/html; charset=utf-8")
 
             if path == "/album":
                 return self._send(200, render_album(conn), "text/html; charset=utf-8")
@@ -1784,6 +1941,22 @@ class Handler(BaseHTTPRequestHandler):
         path, q = self._query()
         conn = db()
         try:
+            # 极简记录页的提交（也是家长最常用的入口）
+            if path == "/quick":
+                form = self._form()
+                add_question(conn, (form.get("question") or [""])[0])
+                return self._send(303, "", headers={"Location": "/quick"})
+
+            # 设备端：记一个问题（只记时刻，内容回家补）
+            if path == "/api/question_quick":
+                add_question_pending(conn, (q.get("cat") or [""])[0])
+                return self._send(200, "OK\n")
+
+            # 设备端：孩子有件事想告诉爸妈
+            if path == "/api/child_note":
+                add_child_note(conn)
+                return self._send(200, "OK\n")
+
             if path == "/api/checkin.txt" or path == "/api/checkin":
                 habit = (q.get("habit") or [""])[0]
                 ok, msg = check_in(conn, habit)
@@ -1878,6 +2051,16 @@ class Handler(BaseHTTPRequestHandler):
                 add_approval(conn, "", "小豆", track=64, kind="question")
                 conn.commit()
                 return self._send(303, "", headers={"Location": "/?sent=qpush"})
+
+            if path == "/parent/fill":
+                form = self._form()
+                fill_pending_question(conn, self._int(form.get("id")),
+                                      (form.get("question") or [""])[0])
+                return self._send(303, "", headers={"Location": "/?sent=qfill"})
+
+            if path == "/parent/notes_seen":
+                mark_notes_seen(conn)
+                return self._send(303, "", headers={"Location": "/?sent=nseen"})
 
             if path == "/parent/question":
                 form = self._form()
