@@ -242,21 +242,23 @@
 
 ---
 
-## 九、支持两块板（同一份固件）
+## 九、支持三种硬件（同一份固件）
 
-| | DevKitC + GC9A01 | Waveshare ESP32-S3-Touch-LCD-1.85 |
-|---|---|---|
-| 屏幕 | GC9A01 SPI 240×240 | ST77916 **QSPI 360×360** |
+| | DevKitC + GC9A01 | Waveshare **1.85C（带外壳）** | Waveshare 1.85 裸板 |
+|---|---|---|---|
+| 屏幕 | GC9A01 SPI 240×240 | ST77916 **QSPI 360×360** | 同左 |
+| 外壳 | 无 | **音箱盒 + 5W 喇叭 + 电池仓** | 无后盖 |
 | 交互 | 2 个实体按键 | **CST816 触摸**（轻点=完成，长按=切换） |
 | 语音 | DFPlayer | **PCM5101 I2S + 喇叭** |
 | 计时 | NTP（断网没提醒） | **RTC（断网也能提醒）** |
-| 成本 | ≈¥125 | ¥139 |
+| 成本 | ≈¥125 | 约 ¥180–220 | ¥139（裸板，不推荐） |
 
 改一行宏切换：
 
 ```cpp
-#define BOARD BOARD_DEVKITC_GC9A01
-// #define BOARD BOARD_WS_1_85
+#define BOARD BOARD_DEVKITC_GC9A01   // 参考实现
+// #define BOARD BOARD_WS_1_85        // 裸板
+// #define BOARD BOARD_WS_1_85C       // 带外壳版（推荐）
 ```
 
 卡片尺寸自动适配：固件按屏幕宽度请求 `?s=360`，服务端渲染 360×360（259200 字节），

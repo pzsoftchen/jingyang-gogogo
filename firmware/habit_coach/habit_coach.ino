@@ -56,7 +56,8 @@
 // BOARD_WS_1_85         : Waveshare ESP32-S3-Touch-LCD-1.85（ST77916 QSPI 360×360
 //                         + CST816 电容触摸 + PCM5101 I2S + TF 卡 + RTC + 电池）
 #define BOARD_DEVKITC_GC9A01 0
-#define BOARD_WS_1_85        1
+#define BOARD_WS_1_85        1   // 标准版裸板（1.85）
+#define BOARD_WS_1_85C       2   // 带音箱盒版（1.85C / 1.85C-BOX）：多了外壳、5W 喇叭、电池仓
 
 #ifndef BOARD
 #define BOARD BOARD_DEVKITC_GC9A01
@@ -66,7 +67,7 @@
 #define USE_WIFI       1   // 设 0 则完全离线
 #define ENABLE_REMIND  1   // 定时语音提醒
 
-#if BOARD == BOARD_WS_1_85
+#if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
   #define USE_DFPLAYER   0
   #define USE_TOUCH      1
   #define USE_SD_AUDIO   1     // TF 卡 + I2S（需要 ESP32-audioI2S 库）
@@ -87,8 +88,8 @@
 #define K(v) ((int)((v) * UI_K))
 
 // ======================= 引脚 =======================
-#if BOARD == BOARD_WS_1_85
-  // 屏幕 ST77916（QSPI）
+#if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
+  // 屏幕 ST77916（QSPI）——1.85 与 1.85C 完全一致
   #define LCD_SDA0  46
   #define LCD_SDA1  45
   #define LCD_SDA2  42
@@ -97,9 +98,16 @@
   #define LCD_CS    21
   #define LCD_BL     5
   #define LCD_RST_EXIO 2      // 挂在 TCA9554 的 P2 上，不是 GPIO
-  // 触摸 CST816（独立 I2C 总线）
-  #define TP_SDA     1
-  #define TP_SCL     3
+  // 触摸 CST816：1.85 用独立总线(1/3)；1.85C 与主 I2C 共用(11/10)
+  #if BOARD == BOARD_WS_1_85C
+    #define TP_SDA   11
+    #define TP_SCL   10
+    #define TP_ON_SYS_BUS 1
+  #else
+    #define TP_SDA    1
+    #define TP_SCL    3
+    #define TP_ON_SYS_BUS 0
+  #endif
   #define TP_INT     4
   #define TP_RST_EXIO 1       // TCA9554 P1
   // 系统 I2C（TCA9554 / RTC / IMU 共用）
@@ -136,7 +144,7 @@
 #endif
 
 // ======================= 显示 =======================
-#if BOARD == BOARD_WS_1_85
+#if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(LCD_CS, LCD_SCK, LCD_SDA0, LCD_SDA1, LCD_SDA2, LCD_SDA3);
 Arduino_GFX *gfx = new Arduino_ST77916(bus, GFX_NOT_DEFINED /* RST 走 TCA9554 */, 0 /* rotation */,
                                        true /* IPS */, SCREEN_W, SCREEN_H);
@@ -1049,7 +1057,7 @@ void completeHabit(int idx) {
 }
 
 // ======================= 1.85 专用：I/O 扩展器 + 触摸 =======================
-#if BOARD == BOARD_WS_1_85
+#if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
 #define TCA9554_ADDR 0x20
 
 void tcaWrite(uint8_t reg, uint8_t val) {
@@ -1080,26 +1088,34 @@ void tca9554Init() {
 #endif
 
 #if USE_TOUCH
+// 1.85C 的触摸挂在与 TCA9554/RTC 同一条 I2C 上；1.85 是独立总线
+#if TP_ON_SYS_BUS
+  #define TPWIRE Wire
+#else
+  #define TPWIRE Wire1
+#endif
 bool touchHeld = false, touchLongFired = false;
 unsigned long touchDownAt = 0;
 
 void touchInit() {
-  Wire1.begin(TP_SDA, TP_SCL, 400000);
-  Wire1.beginTransmission(CST816_ADDR);
-  Wire1.write(0x00);
-  Wire1.endTransmission(false);
-  Wire1.requestFrom((int)CST816_ADDR, 1);
-  touchReady = Wire1.available();
+#if !TP_ON_SYS_BUS
+  Wire1.begin(TP_SDA, TP_SCL, 400000);   // 1.85：独立总线
+#endif                                     // 1.85C：Wire 已在 tca9554Init() 里起好
+  TPWIRE.beginTransmission(CST816_ADDR);
+  TPWIRE.write(0x00);
+  TPWIRE.endTransmission(false);
+  TPWIRE.requestFrom((int)CST816_ADDR, 1);
+  touchReady = TPWIRE.available();
   Serial.printf("[touch] CST816 %s\n", touchReady ? "OK" : "未找到");
 }
 
 int touchGesture() {
   if (!touchReady) return 0;
-  Wire1.beginTransmission(CST816_ADDR);
-  Wire1.write(0x01);
-  Wire1.endTransmission(false);
-  Wire1.requestFrom((int)CST816_ADDR, 1);
-  return Wire1.available() ? Wire1.read() : 0;
+  TPWIRE.beginTransmission(CST816_ADDR);
+  TPWIRE.write(0x01);
+  TPWIRE.endTransmission(false);
+  TPWIRE.requestFrom((int)CST816_ADDR, 1);
+  return TPWIRE.available() ? TPWIRE.read() : 0;
 }
 
 // 轻点 / 长按 → 映射成和按键一样的事件（0 无 / 1 短 / 2 长）
@@ -1200,7 +1216,7 @@ void setup() {
 #endif
   buzzerInit();
 
-#if BOARD == BOARD_WS_1_85
+#if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
   tca9554Init();                 // 必须先放 LCD_RST / TP_RST，否则屏不亮
   pinMode(LCD_BL, OUTPUT);
   digitalWrite(LCD_BL, HIGH);

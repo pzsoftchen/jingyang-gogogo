@@ -19,8 +19,10 @@ build() {
 
 case "${1:-all}" in
   devkitc) build "DevKitC + GC9A01 (240)" BOARD_DEVKITC_GC9A01 ;;
-  185)     build "Waveshare 1.85 (360)"   BOARD_WS_1_85 ;;
-  all)     build "DevKitC + GC9A01 (240)" BOARD_DEVKITC_GC9A01
-           build "Waveshare 1.85 (360)"   BOARD_WS_1_85 ;;
-  *) echo "用法: $0 [devkitc|185|all]"; exit 1 ;;
+  185)     build "Waveshare 1.85 裸板 (360)"    BOARD_WS_1_85 ;;
+  185c)    build "Waveshare 1.85C 带外壳 (360)" BOARD_WS_1_85C ;;
+  all)     build "DevKitC + GC9A01 (240)"      BOARD_DEVKITC_GC9A01
+           build "Waveshare 1.85 裸板 (360)"    BOARD_WS_1_85
+           build "Waveshare 1.85C 带外壳 (360)" BOARD_WS_1_85C ;;
+  *) echo "用法: $0 [devkitc|185|185c|all]"; exit 1 ;;
 esac
