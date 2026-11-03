@@ -174,6 +174,11 @@ bool  cardPending = false;
 int   cardN = 0, cardIdx = 0;
 uint16_t *cardBuf = nullptr;
 
+// 按键状态（必须定义在所有函数之前：Arduino 会把函数原型生成到文件顶部）
+struct Btn { int8_t pin; bool last; unsigned long pressedAt; bool longFired; };
+Btn btnA = {BTN_A, HIGH, 0, false};
+Btn btnB = {BTN_B, HIGH, 0, false};
+
 // 二选一时刻：完成全部后，偶尔让小豆豆问一句"你想看我跳舞还是听秘密"
 bool choiceMode = false;
 unsigned long choiceUntil = 0;
@@ -249,6 +254,7 @@ String queue = "";           // 离线打卡队列："brush@2026-10-30;"
 bool postCheckin(const String &habit);
 void postPath(const String &path);
 String deviceQuery();
+void setBanner(const String &s, unsigned long ms = 4000);
 void say(int track);
 
 // ======================= 音频 =======================
@@ -656,7 +662,7 @@ void enterCard(int idx) {
   }
 }
 
-void setBanner(const String &s, unsigned long ms = 4000) {
+void setBanner(const String &s, unsigned long ms) {   // 默认值在前置声明里
   banner = s;
   lastBannerClear = millis() + ms;
   needRedraw = true;
@@ -1116,10 +1122,6 @@ int readTouch() {
 #endif
 
 // ======================= 按键 =======================
-struct Btn { uint8_t pin; bool last; unsigned long pressedAt; bool longFired; };
-Btn btnA = {BTN_A, HIGH, 0, false};
-Btn btnB = {BTN_B, HIGH, 0, false};
-
 int readBtn(Btn &b) {
   if (b.pin < 0) return 0;             // 这块板没有按键
   bool cur = digitalRead(b.pin);
@@ -1248,6 +1250,9 @@ void loop() {
   static unsigned long lastDayCheck = 0;
   if (millis() - lastDayCheck > 5000) { lastDayCheck = millis(); rollDayIfNeeded(); }
 
+  // 2b. 输入：按键（DevKitC）或触摸（1.85）
+  int a = readBtn(btnA);
+  int b = readBtn(btnB);
   // 2a. 二选一时刻（优先级最高，吃掉其它输入）
   if (choiceMode) {
     if (millis() > choiceUntil) { choiceMode = false; needRedraw = true; }
@@ -1266,9 +1271,6 @@ void loop() {
     return;
   }
 
-  // 2b. 输入：按键（DevKitC）或触摸（1.85）
-  int a = readBtn(btnA);
-  int b = readBtn(btnB);
 #if USE_TOUCH
   {
     int t = readTouch();

@@ -90,7 +90,8 @@ def main():
         rows = []
         for i in range(0, len(px), 16):
             chunk = px[i:i + 16]
-            rows.append("    " + ",".join("0x%04x" % ((v >> 8) | ((v & 0xff) << 8)) if False else ("0x%02x,0x%02x" % (v & 0xff, v >> 8)) for v in chunk))
+            # 每行末尾必须带逗号，否则两行会黏在一起变成语法错误
+            rows.append("    " + ",".join("0x%02x,0x%02x" % (v & 0xff, v >> 8) for v in chunk) + ",")
         lines.append("  {  // %s  %s" % (ICONS[idx][0], ICONS[idx][1]))
         lines.extend(rows)
         lines.append("  },")
