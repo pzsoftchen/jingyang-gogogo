@@ -30,6 +30,7 @@ const char *phase_name(Phase p);
 const Palette &palette_for_phase(Phase p);
 int volume_steps(int percent, int maxSteps, bool night);
 int parse_bits7(const char *csv, bool out[7]);
+bool parse_volume_pct(const char *s, int &out);
 void week_dot_positions(int cx, int cy, int radius, int outX[7], int outY[7]);
 WeekDotState week_dot_state(int i, bool calValid, const bool cal[7], int weekday);
 void habit_arc_positions(int count, int cx, int cy, int radius, int outX[4], int outY[4]);

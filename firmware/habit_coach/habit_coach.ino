@@ -30,6 +30,7 @@
 #include <Arduino_GFX_Library.h>
 #include "habit_icons.h"      // 习惯 emoji 图标（由 tools/gen_icons.py 生成）
 #include "st77916_185c_init.h" // 1.85C 专用 ST77916 厂商初始化表
+#include "ui_theme.h"         // 四幕时段/调色板/弧线/音量纯函数
 #include <esp_heap_caps.h>
 #if __has_include(<esp_arduino_version.h>)
 #include <esp_arduino_version.h>
@@ -252,7 +253,12 @@ bool touchReady = false;
 
 // ======================= 状态 =======================
 Preferences prefs;
-bool weekDone[7] = {false, false, false, false, false, false, false};  // 近 7 天是否完成
+bool weekDone[7] = {false, false, false, false, false, false, false};  // 近 7 天是否完成（旧字段）
+bool weekCalValid = false;                                             // 服务器是否下发 WEEK_CAL
+bool weekCal[7] = {false, false, false, false, false, false, false};   // 本周一到周日
+int  weekday = 0;             // 1=周一 … 7=周日；0=未知
+int  volumePct = -1;          // 家长页音量 0-100；-1=服务器未下发
+bool nightMode = false;       // 由时段引擎更新
 int  streak = 0;
 int  protoVer = 1;        // 服务器协议版本（V=2）
 String packVer = "";      // 服务器上的语音包版本（PACK=voice.1）
@@ -316,8 +322,9 @@ void audioInit() {
     return;
   }
   audio.setPinout(I2S_BCK, I2S_LRCK, I2S_DIN);
-  audio.setVolume(12);          // 0-21；孩子房间建议 8-12
+  audio.setVolume(12);          // 默认 0-21；服务器下发 VOL 后覆盖
   audioOk = true;
+  applyVolume();
   Serial.println("[audio] TF + I2S OK");
 }
 
@@ -328,6 +335,16 @@ void audioLoop() {
 void audioInit() {}
 void audioLoop() {}
 #endif
+
+// 家长页音量 0-100 → 板型对应的音量档位；夜间自动压到 60%
+void applyVolume() {
+  if (volumePct < 0) return;
+#if USE_SD_AUDIO
+  if (audioOk) audio.setVolume(volume_steps(volumePct, 21, nightMode));
+#elif USE_DFPLAYER
+  if (mp3Ok) mp3.volume(volume_steps(volumePct, 30, nightMode));
+#endif
+}
 
 void say(int track) {
 #if USE_SD_AUDIO
@@ -966,6 +983,20 @@ bool syncState() {
       }
     }
     else if (line.startsWith("Q="))      cardN = line.substring(2).toInt();
+    else if (line.startsWith("WEEK_CAL=")) {
+      weekCalValid = (parse_bits7(line.substring(9).c_str(), weekCal) == 7);
+    }
+    else if (line.startsWith("WEEKDAY=")) {
+      int wd = line.substring(8).toInt();
+      if (wd >= 1 && wd <= 7) weekday = wd;
+    }
+    else if (line.startsWith("VOL=")) {
+      int v = 0;
+      if (parse_volume_pct(line.substring(4).c_str(), v)) {
+        volumePct = v;
+        applyVolume();
+      }
+    }
     else if (line.startsWith("WEEK="))  parseWeek(line.substring(5));
     else if (line.startsWith("STREAK=")) streak = line.substring(7).toInt();
     else if (line.startsWith("H="))      parseHabitLine(line);
@@ -1311,6 +1342,7 @@ void setup() {
   mp3Ok = mp3.begin(Serial1);
   if (mp3Ok) {
     mp3.volume(22);
+    applyVolume();
     mp3.EQ(DFPLAYER_EQ_NORMAL);
     Serial.println("[mp3] DFPlayer OK");
   } else {

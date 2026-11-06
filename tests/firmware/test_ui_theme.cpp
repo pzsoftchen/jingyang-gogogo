@@ -78,6 +78,23 @@ int main() {
         !bits[6]);
   CHECK_EQ(parse_bits7("", bits), 0);
   CHECK_EQ(parse_bits7("1,0", bits), 2);
+  CHECK_EQ(parse_bits7("1,0,1,1,0,0,0,1", bits), 7);
+  CHECK_EQ(parse_bits7("1,x,1", bits), 3);
+  CHECK(bits[0] && !bits[1] && bits[2]);
+
+  // 音量字符串：只接受 0-100 的纯数字；toInt() 会把 "abc" 当 0，不能用
+  int vp = -1;
+  CHECK(parse_volume_pct("60", vp));
+  CHECK_EQ(vp, 60);
+  CHECK(parse_volume_pct("0", vp));
+  CHECK_EQ(vp, 0);
+  CHECK(parse_volume_pct("100", vp));
+  CHECK_EQ(vp, 100);
+  CHECK(!parse_volume_pct("101", vp));
+  CHECK(!parse_volume_pct("-1", vp));
+  CHECK(!parse_volume_pct("abc", vp));
+  CHECK(!parse_volume_pct("", vp));
+  CHECK(!parse_volume_pct("60x", vp));
 
   // 弧线坐标：240 与 360 都不越界、左右对称、顶部点在正上方
   for (int size : {240, 360}) {

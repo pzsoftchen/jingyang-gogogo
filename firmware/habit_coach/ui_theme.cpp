@@ -98,6 +98,20 @@ int parse_bits7(const char *csv, bool out[7]) {
   return n;
 }
 
+bool parse_volume_pct(const char *s, int &out) {
+  if (!s || !*s) return false;
+  int v = 0;
+  const char *p = s;
+  while (*p >= '0' && *p <= '9') {
+    v = v * 10 + (*p - '0');
+    if (v > 100) return false;
+    p++;
+  }
+  if (*p) return false;   // 只接受纯数字
+  out = v;
+  return true;
+}
+
 void week_dot_positions(int cx, int cy, int radius, int outX[7], int outY[7]) {
   for (int i = 0; i < 7; i++) {
     float a = (float)(-90 + (i - 3) * 16) * kPi / 180.0f;
