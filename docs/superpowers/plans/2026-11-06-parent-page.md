@@ -141,7 +141,7 @@ git commit -m "feat: add day/night theme boundary helper"
 - [ ] **Step 1: 写失败测试**
 
 ```python
-class ParentPageThemeTests(HttpTests):
+class ParentPageThemeTests(HttpBase, Base):
     def test_home_has_theme_class(self):
         code, body = self.get("/")
         self.assertEqual(code, 200)
@@ -177,6 +177,7 @@ Expected: FAIL（缺少 class/日期/状态）。
 - 所有 `h1/.dateline/.identity/.now` 左对齐；`.now { margin-left:auto; }`。
 - `{{DEVSTATUS}}` 放标题下、三张卡之上。
 - 移除标题里的 `每天最多推 {{BUDGET}} 次内容`；预算移到惊喜卡/更多。
+- 把 HTTP 测试的服务器/请求工具抽成不含 test_* 的 `HttpBase`；`HttpTests(HttpBase, Base)` 和新页面测试都用它，避免子类重复继承所有 HTTP 测试。
 - 实现 `sun_svg(theme)`：day 太阳、night 睡帽/闭眼；返回内联 SVG。
 - `render_page` 计算：
 
@@ -226,7 +227,7 @@ class NudgeCountTests(Base):
         self.assertEqual(server.open_questions_count(self.conn), 3)
 
 
-class NudgeHttpTests(HttpTests):
+class NudgeHttpTests(HttpBase, Base):
     def test_home_shows_nudge(self):
         self.conn.execute(
             "INSERT INTO questions(question,answer,status,created) VALUES('为什么天会黑','',?,?)",
@@ -286,7 +287,7 @@ git commit -m "feat: consolidate parent page details and add open-question nudge
 - [ ] **Step 1: 写失败测试**
 
 ```python
-class MoreHabitsTests(HttpTests):
+class MoreHabitsTests(HttpBase, Base):
     def test_today_records_and_revoke_live_in_more(self):
         server.check_in(self.conn, "brush", "poc")
         code, body = self.get("/")
@@ -361,7 +362,7 @@ class VolumeTests(Base):
         self.assertIn("VOL=100", server.state_as_text(self.conn))
 
 
-class VolumeHttpTests(HttpTests):
+class VolumeHttpTests(HttpBase, Base):
     def test_parent_volume_route(self):
         code, _ = self.post("/parent/volume", {"volume": "45"})
         self.assertEqual(code, 200)
@@ -379,7 +380,7 @@ Expected: FAIL（函数/路由/协议缺失）。
 - `state_as_text` 在 `PACK=` 前追加 `VOL=%d`。
 - `render_page` 替换 `{{VOLUME}}`；PAGE 的「更多 → 设备」加 slider（`name="volume" min=0 max=100 value="{{VOLUME}}"`）和一个保存按钮。
 - `test_unknown_protocol_lines_are_ignored` 的 known 列表加 `VOL=`。
-- 测试辅助：`tests/test_server.py` 加 `import urllib.parse`；把 `HttpTests.post(self, path)` 扩展为 `post(self, path, data=None)`，有 data 时 `urllib.parse.urlencode(data).encode("utf-8")`；现有调用不用改。
+- 测试辅助：`tests/test_server.py` 加 `import urllib.parse`；把 `HttpBase.post(self, path)` 扩展为 `post(self, path, data=None)`，有 data 时 `urllib.parse.urlencode(data).encode("utf-8")`；现有调用不用改。
 
 - [ ] **Step 4: 运行测试**
 
@@ -460,7 +461,7 @@ git commit -m "feat: apply parent volume in firmware with night cap"
 - [ ] **Step 1: 写失败测试**
 
 ```python
-class QuickAlbumThemeTests(HttpTests):
+class QuickAlbumThemeTests(HttpBase, Base):
     def test_quick_has_theme_and_toggle(self):
         code, body = self.get("/quick")
         html = body.decode("utf-8")

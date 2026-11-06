@@ -373,6 +373,36 @@ def theme_now():
     return theme_for_time(now.hour, now.minute)
 
 
+def sun_svg(theme):
+    """家长页标题旁的小角色：白天太阳，夜里睡帽太阳。"""
+    if theme == "night":
+        return '''<svg class="sunart" viewBox="0 0 64 64" aria-hidden="true">
+<g stroke="var(--ray)" stroke-width="3" stroke-linecap="round" opacity=".55">
+<line x1="32" y1="7" x2="32" y2="12"/><line x1="7" y1="32" x2="12" y2="32"/><line x1="57" y1="32" x2="52" y2="32"/>
+<line x1="15" y1="15" x2="19" y2="19"/><line x1="49" y1="49" x2="45" y2="45"/>
+</g>
+<circle cx="32" cy="34" r="17" fill="var(--sun)"/>
+<path d="M18 24 Q24 10 32 18 L44 22 Q34 15 27 23 Z" fill="var(--cap)"/>
+<circle cx="28" cy="18" r="4" fill="#FFF4D6"/>
+<path d="M24 34 Q27 37 30 34" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/>
+<path d="M34 34 Q37 37 40 34" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/>
+<path d="M29 41 Q32 43 35 41" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/>
+<circle cx="22" cy="39" r="2.5" fill="var(--cheek)" opacity=".45"/><circle cx="42" cy="39" r="2.5" fill="var(--cheek)" opacity=".45"/>
+</svg>'''
+    return '''<svg class="sunart" viewBox="0 0 64 64" aria-hidden="true">
+<g stroke="var(--ray)" stroke-width="4" stroke-linecap="round">
+<line x1="32" y1="5" x2="32" y2="11"/><line x1="32" y1="53" x2="32" y2="59"/>
+<line x1="5" y1="32" x2="11" y2="32"/><line x1="53" y1="32" x2="59" y2="32"/>
+<line x1="13" y1="13" x2="18" y2="18"/><line x1="46" y1="46" x2="51" y2="51"/>
+<line x1="51" y1="13" x2="46" y2="18"/><line x1="18" y1="46" x2="13" y2="51"/>
+</g>
+<circle cx="32" cy="32" r="17" fill="var(--sun)"/>
+<circle cx="25" cy="30" r="2.2" fill="var(--ink)"/><circle cx="39" cy="30" r="2.2" fill="var(--ink)"/>
+<circle cx="21" cy="37" r="3" fill="var(--cheek)" opacity=".75"/><circle cx="43" cy="37" r="3" fill="var(--cheek)" opacity=".75"/>
+<path d="M26 38 Q32 43 38 38" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/>
+</svg>'''
+
+
 # ----------------------------- 业务逻辑 -----------------------------
 def get_habits(conn):
     """按一天的时间顺序返回启用中的习惯（设备上的星星也按这个顺序）。"""
@@ -1518,8 +1548,14 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{CHILD}}的习惯 · 家长端</title>
 <style>
-  :root{--bg:#111418;--card:#1b2027;--line:#2a313a;--fg:#e8edf3;--dim:#8b97a6;
-        --ok:#3ddc97;--warn:#ffb454;--pink:#ff6b9d;--gold:#ffd166;}
+  body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#8B735E;
+        --ok:#2F6F63;--okfill:#5BC8B0;--warn:#E76F51;--pink:#E76F51;--gold:#FFC93C;
+        --panel:#F3E5D3;--input:#FFFDF7;--accent-ink:#FFF8EC;
+        --sun:#FFB703;--ray:#FFC93C;--ink:#4A3B32;--cheek:#FF8FA3;--cap:#7C6FD6;}
+  body.night{--bg:#1B2340;--card:#242E4F;--line:#3A466F;--fg:#FFF4D6;--dim:#9EA9C8;
+        --ok:#5BC8B0;--okfill:#5BC8B0;--warn:#FF8A65;--pink:#FF8A65;--gold:#FFE8A3;
+        --panel:#2E3B63;--input:#1B2340;--accent-ink:#2A1A14;
+        --sun:#F4C56A;--ray:#E0AE58;--ink:#4A3B32;--cheek:#FF8FA3;--cap:#7C6FD6;}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
        font:16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
@@ -1538,10 +1574,10 @@ PAGE = """<!doctype html>
   .name{flex:1}
   .time{color:var(--dim);font-size:13px}
   .week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;text-align:center}
-  .day{background:#141a21;border-radius:10px;padding:8px 0;font-size:12px;color:var(--dim)}
-  .day b{display:block;font-size:18px;color:var(--fg)}
-  .day.full{background:#123a2b;color:#9fe6c6}
-  .day.full b{color:var(--ok)}
+  .weekday{background:var(--panel);border-radius:10px;padding:8px 0;font-size:12px;color:var(--dim)}
+  .weekday b{display:block;font-size:18px;color:var(--fg)}
+  .weekday.full{background:var(--panel);color:var(--ok);border:1px solid var(--ok)}
+  .weekday.full b{color:var(--ok)}
   .review{white-space:pre-wrap;font-size:14px;line-height:1.75;background:#12171d;
           border-radius:10px;padding:12px;border-left:3px solid var(--pink)}
   .slots{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
@@ -1608,9 +1644,39 @@ PAGE = """<!doctype html>
   .devdot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:0 0 auto}
   .devstatus.on .devdot{background:var(--ok);box-shadow:0 0 0 3px rgba(61,220,151,.12)}
   .devmeta{margin-left:auto;color:var(--dim);font-size:12px}
-</style></head><body><div class="wrap">
-  <h1>{{CHILD}}</h1>
-  <div class="sub">今天 {{DAY}} · {{STAGENAME}} · 每天最多推 {{BUDGET}} 次内容</div>
+  .today-head{display:flex;align-items:center;gap:10px;text-align:left;margin:6px 0 8px}
+  .today-head .identity{flex:1;min-width:0;text-align:left}
+  .today-head h1{font-size:22px;line-height:1.1;margin:0;text-align:left;color:var(--fg)}
+  .dateline{color:var(--dim);font-size:12px;margin-top:3px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .now{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap}
+  .sunart{width:46px;height:46px;flex:0 0 auto}
+  body.day .review, body.night .review,
+  body.day .msg, body.night .msg,
+  body.day .qa, body.night .qa,
+  body.day textarea, body.night textarea,
+  body.day input[type=text], body.night input[type=text]{background:var(--panel);color:var(--fg)}
+  body.day .slot, body.night .slot,
+  body.day .qbtns button, body.night .qbtns button,
+  body.day .chip, body.night .chip,
+  body.day .mini, body.night .mini{background:var(--panel);color:var(--fg)}
+  body.day .slot.on, body.night .slot.on{background:var(--card);border-color:var(--pink)}
+  body.day .weekday, body.night .weekday{background:var(--panel);color:var(--dim)}
+  body.day .weekday b, body.night .weekday b{color:var(--fg)}
+  body.day .weekday.full, body.night .weekday.full{background:var(--panel);border:1px solid var(--ok);color:var(--ok)}
+  body.day .weekday.full b, body.night .weekday.full b{color:var(--ok)}
+  .dot.on{background:var(--okfill);border-color:var(--okfill);color:#06281c}
+  .send{color:var(--accent-ink)}
+  .albumLink{border-color:var(--gold);color:var(--gold)}
+  .devstatus.on .devdot{background:var(--okfill)}
+</style></head><body class="{{THEME}}"><div class="wrap">
+  <div class="today-head">
+    {{SUN}}
+    <div class="identity">
+      <h1>{{CHILD}}</h1>
+      <div class="dateline">今天 {{DAY_CN}} 周{{WEEKDAY_CN}} · {{STAGENAME}}</div>
+    </div>
+    <div class="now">{{NOW}}</div>
+  </div>
 
   {{DEVSTATUS}}
 
@@ -1783,7 +1849,7 @@ def render_page(conn, sent=""):
         label = "一二三四五六日"[dd.weekday()]
         full = s["total"] > 0 and d["count"] >= s["total"]
         week_html.append(
-            '<div class="day %s">%s<b>%d</b></div>'
+            '<div class="weekday %s">%s<b>%d</b></div>'
             % ("full" if full else "", label, d["count"])
         )
 
@@ -1970,10 +2036,20 @@ def render_page(conn, sent=""):
         cards_html = '<div class="qwait" style="margin-top:10px">写一条答案后，这里会预览设备上的问题卡。</div>'
 
     page = PAGE
+    theme = theme_now()
+    d = datetime.date.fromisoformat(s["day"])
+    day_cn = "%d月%d日" % (d.month, d.day)
+    weekday_cn = "一二三四五六日"[d.weekday()]
+    now = datetime.datetime.now().strftime("%H:%M")
     for k, v in {
         "{{CHILD}}": s["child_name"],
         "{{COACH}}": s["coach_name"],
         "{{DAY}}": s["day"],
+        "{{THEME}}": theme,
+        "{{SUN}}": sun_svg(theme),
+        "{{DAY_CN}}": day_cn,
+        "{{WEEKDAY_CN}}": weekday_cn,
+        "{{NOW}}": now,
         "{{DEVSTATUS}}": device_status_html(conn),
         "{{STREAK}}": str(st["streak"]),
         "{{BEST}}": str(st["best"]),

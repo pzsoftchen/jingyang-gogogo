@@ -377,8 +377,8 @@ class DeviceStatusTests(Base):
 
 # ============================ HTTP 端到端 ============================
 
-class HttpTests(Base):
-    """真正起一个服务，打真实请求——render_page 的 NameError 就是这里抓到的。"""
+class HttpBase:
+    """HTTP 测试的共用服务器/请求工具；不含任何 test_*，避免子类重复继承测试。"""
 
     @classmethod
     def setUpClass(cls):
@@ -394,7 +394,7 @@ class HttpTests(Base):
         cls.srv.server_close()
 
     def get(self, path):
-        url = "http://127.0.0.1:%d%s" % (HttpTests.port, path)
+        url = "http://127.0.0.1:%d%s" % (self.port, path)
         try:
             with urllib.request.urlopen(url, timeout=10) as r:
                 return r.status, r.read()
@@ -402,13 +402,17 @@ class HttpTests(Base):
             return e.code, e.read()
 
     def post(self, path):
-        url = "http://127.0.0.1:%d%s" % (HttpTests.port, path)
+        url = "http://127.0.0.1:%d%s" % (self.port, path)
         req = urllib.request.Request(url, data=b"", method="POST")
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, r.read()
         except urllib.error.HTTPError as e:
             return e.code, e.read()
+
+
+class HttpTests(HttpBase, Base):
+    """真正起一个服务，打真实请求——render_page 的 NameError 就是这里抓到的。"""
 
     def test_home_page_renders(self):
         code, body = self.get("/")
@@ -680,4 +684,28 @@ class ThemeTests(Base):
         self.assertEqual(server.theme_for_time(19, 59), "day")
         self.assertEqual(server.theme_for_time(20, 0), "night")
         self.assertEqual(server.theme_for_time(0, 0), "night")
+
+
+class ParentPageThemeTests(HttpBase, Base):
+    def test_home_has_theme_class(self):
+        code, body = self.get("/")
+        self.assertEqual(code, 200)
+        html = body.decode("utf-8")
+        self.assertIn('class="%s"' % server.theme_now(), html)
+
+    def test_home_has_date_and_time_left_aligned(self):
+        code, body = self.get("/")
+        html = body.decode("utf-8")
+        d = datetime.date.today()
+        wd = "一二三四五六日"[d.weekday()]
+        self.assertIn("今天 %d月%d日 周%s" % (d.month, d.day, wd), html)
+        self.assertRegex(html, r"\d{2}:\d{2}")
+        self.assertIn("today-head", html)
+
+    def test_home_has_device_status(self):
+        self.get("/api/state.txt?d=poc&rssi=-61")
+        code, body = self.get("/")
+        html = body.decode("utf-8")
+        self.assertIn("设备在线", html)
+        self.assertIn("-61 dBm", html)
 
