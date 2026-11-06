@@ -200,6 +200,12 @@ int main() {
   bool calTodayOpen[7] = {true, false, false, true, false, false, false};
   CHECK_EQ(week_dot_state(2, true, calTodayOpen, 3), WEEK_TODAY);
 
+  // 「今天」的点更大；完成/未来保持基础半径
+  CHECK_EQ(week_dot_radius(WEEK_FUTURE, 7), 7);
+  CHECK_EQ(week_dot_radius(WEEK_DONE, 7), 7);
+  CHECK_EQ(week_dot_radius(WEEK_TODAY, 7), 9);
+  CHECK_EQ(week_dot_radius(WEEK_TODAY_DONE, 7), 9);
+
   if (failures) {
     std::printf("%d ui_theme test(s) failed\n", failures);
     return 1;

@@ -483,6 +483,33 @@ void drawBackground(const Palette &p) {
   }
 }
 
+// 顶部 7 点：周一到周日，沿缓弧排布；今天更大 + 珊瑚外圈
+void drawWeekArc(const Palette &p) {
+  int x[7], y[7];
+  week_dot_positions(SCREEN_W / 2, SCREEN_H / 2, S(150), x, y);
+  for (int i = 0; i < 7; i++) {
+    WeekDotState st = weekCalValid
+        ? week_dot_state(i, true, weekCal, weekday)
+        : (weekDone[i] ? WEEK_DONE : WEEK_FUTURE);
+    int r = week_dot_radius(st, S(7));
+    if (st == WEEK_DONE) {
+      ui->fillCircle(x[i], y[i], r, p.weekDone);
+    } else if (st == WEEK_TODAY) {
+      ui->fillCircle(x[i], y[i], r, p.weekToday);
+      ui->drawCircle(x[i], y[i], S(12), p.weekTodayRing);
+    } else if (st == WEEK_TODAY_DONE) {
+      ui->fillCircle(x[i], y[i], r, p.weekDone);
+      ui->drawCircle(x[i], y[i], S(12), p.weekTodayRing);
+      int u = (r / 3 > 1) ? r / 3 : 1;
+      ui->drawLine(x[i] - u, y[i], x[i], y[i] + u, p.bgTop);
+      ui->drawLine(x[i], y[i] + u, x[i] + 2 * u, y[i] - u, p.bgTop);
+    } else {
+      ui->drawCircle(x[i], y[i], r, p.weekFuture);
+    }
+  }
+  ui->fillCircle(S(18), S(18), S(4), wifiOk ? 0x07E0 : 0x4208);
+}
+
 void drawStar(int cx, int cy, int r, bool filled, bool sel) {
   int px[10], py[10];
   for (int i = 0; i < 10; i++) {
@@ -604,15 +631,7 @@ void render() {
   Palette p = palette_for_phase(currentPhase);
   drawBackground(p);
 
-  // 顶部：本周 7 个格子（Task 5 换成缓弧）
-  int dw = K(24), dx0 = SCREEN_W / 2 - 3 * dw, topY = K(34), dotR = K(9);
-  for (int i = 0; i < 7; i++) {
-    int x = dx0 + i * dw;
-    if (weekDone[i]) ui->fillCircle(x, topY, dotR, p.weekDone);
-    else             ui->drawCircle(x, topY, dotR, p.weekFuture);
-  }
-  ui->fillCircle(K(24), topY, K(4), wifiOk ? 0x07E0 : 0x4208);
-
+  drawWeekArc(p);
   drawSun(p);
 
   // 今天要做的事：每个习惯一个 emoji 图标（Task 7 换成下弧）

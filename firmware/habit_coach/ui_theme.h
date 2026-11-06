@@ -44,6 +44,7 @@ int parse_bits7(const char *csv, bool out[7]);
 bool parse_volume_pct(const char *s, int &out);
 void week_dot_positions(int cx, int cy, int radius, int outX[7], int outY[7]);
 WeekDotState week_dot_state(int i, bool calValid, const bool cal[7], int weekday);
+int week_dot_radius(WeekDotState s, int base);
 void habit_arc_positions(int count, int cx, int cy, int radius, int outX[4], int outY[4]);
 int habit_hit_test(int x, int y, const int px[4], const int py[4], int count, int radius);
 void sun_ray_endpoints(Phase p, int cx, int cy, int bodyR, int rayR, int outX[8], int outY[8]);

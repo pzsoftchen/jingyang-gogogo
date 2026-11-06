@@ -151,6 +151,10 @@ WeekDotState week_dot_state(int i, bool calValid, const bool cal[7],
   return cal[i] ? WEEK_DONE : WEEK_FUTURE;
 }
 
+int week_dot_radius(WeekDotState s, int base) {
+  return (s == WEEK_TODAY || s == WEEK_TODAY_DONE) ? base + 2 : base;
+}
+
 void habit_arc_positions(int count, int cx, int cy, int radius, int outX[4],
                          int outY[4]) {
   if (count < 1) count = 1;
