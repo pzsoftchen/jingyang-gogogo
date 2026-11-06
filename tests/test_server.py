@@ -735,3 +735,27 @@ class NudgeHttpTests(HttpBase, Base):
         code, body = self.get("/")
         self.assertNotIn("问题等你处理", body.decode("utf-8"))
 
+
+class MoreHabitsTests(HttpBase, Base):
+    def test_today_records_and_revoke_live_in_more(self):
+        server.check_in(self.conn, "brush", "poc")
+        code, body = self.get("/")
+        html = body.decode("utf-8")
+        self.assertIn(">今天的记录<", html)
+        self.assertEqual(html.count('action="/parent/revoke"'), 1)
+        self.assertGreater(
+            html.index('action="/parent/revoke"'), html.index('id="more"'),
+            "撤回入口必须在「更多」里，不能留在首屏")
+
+    def test_all_praise_slots_are_rendered(self):
+        code, body = self.get("/")
+        html = body.decode("utf-8")
+        self.assertEqual(html.count('data-slot="'), len(server.PRESET_PRAISE))
+
+    def test_used_surprise_has_no_dead_skip_button(self):
+        server.claim_surprise(self.conn)
+        server.mark_surprise(self.conn, "skip", "")
+        code, body = self.get("/")
+        html = body.decode("utf-8")
+        self.assertNotIn('action="/parent/surprise_skip"', html)
+

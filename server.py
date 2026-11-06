@@ -1601,9 +1601,10 @@ PAGE = """<!doctype html>
   .weekday.full b{color:var(--ok)}
   .review{white-space:pre-wrap;font-size:14px;line-height:1.75;background:#12171d;
           border-radius:10px;padding:12px;border-left:3px solid var(--pink)}
-  .slots{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+  .slots{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px}
   .slot{text-align:left;background:#232a33;color:var(--fg);border:1px solid var(--line);
-        border-radius:12px;padding:9px 10px;font-size:12px;line-height:1.4;cursor:pointer}
+        border-radius:12px;padding:9px 10px;font-size:12px;line-height:1.4;cursor:pointer;
+        flex:0 0 220px;white-space:normal}
   .slot:before{content:attr(data-slot)" · ";color:var(--dim);font-size:12px}
   .slot.on{border-color:var(--pink);background:#2a1a24}
   textarea,input[type=text]{width:100%;background:#12171d;color:var(--fg);border:1px solid var(--line);
@@ -1779,6 +1780,9 @@ PAGE = """<!doctype html>
       <div class="sub" style="margin-top:8px">{{STAGENOTE}}</div>
     </form>
 
+    <div class="sub" style="margin:22px 0 8px">今天的记录</div>
+    {{TODAYRECORDS}}
+
     <div class="sub" style="margin:22px 0 8px">这个月开几件事（{{ACTIVECOUNT}}/{{MAXH}}）</div>
     <form method="post" action="/parent/habits">
       {{HABITTOGGLES}}
@@ -1843,6 +1847,26 @@ def habit_toggles(conn):
     return "".join(out)
 
 
+def today_records_html(conn):
+    """More → 习惯开关里的今日记录/撤回。"""
+    s = today_state(conn)
+    rows = []
+    for h in s["habits"]:
+        if not h["done"]:
+            continue
+        t = (h["checked_at"] or "")[-8:-3]
+        rows.append(
+            '<div class="habit"><div class="dot on">✓</div>'
+            '<div class="name">%s %s</div><div class="time">%s</div>'
+            '<form method="post" action="/parent/revoke" class="rv" '
+            'onsubmit="return confirm(\'撤回「%s」今天的记录？\')">'
+            '<input type="hidden" name="habit" value="%s">'
+            '<button type="submit">撤回</button></form></div>'
+            % (h["emoji"], h["name"], t, h["name"], h["id"])
+        )
+    return "".join(rows) if rows else '<div class="sub">今天还没有记录。</div>'
+
+
 def render_page(conn, sent=""):
     s = today_state(conn)
     st = stats(conn)
@@ -1854,17 +1878,10 @@ def render_page(conn, sent=""):
         t = (h["checked_at"] or "")[-8:-3] if h["done"] else "还没完成"
         pst = preset_of(h["id"])
         steps = ('<br><span class="stepsm">%s</span>' % pst[8]) if (pst and pst[8]) else ""
-        rv = ""
-        if h["done"]:
-            rv = ('<form method="post" action="/parent/revoke" class="rv" '
-                  'onsubmit="return confirm(\'撤回「%s」今天的记录？\')">'
-                  '<input type="hidden" name="habit" value="%s">'
-                  '<button type="submit">撤回</button></form>'
-                  % (h["name"], h["id"]))
         habits_html.append(
             '<div class="habit"><div class="%s">%s</div>'
-            '<div class="name">%s %s%s</div><div class="time">%s</div>%s</div>'
-            % (cls, mark, h["emoji"], h["name"], steps, t, rv)
+            '<div class="name">%s %s%s</div><div class="time">%s</div></div>'
+            % (cls, mark, h["emoji"], h["name"], steps, t)
         )
 
     week_html = []
@@ -2089,6 +2106,7 @@ def render_page(conn, sent=""):
         "{{SLOTS}}": slots_html,
         "{{APPROVALS}}": approvals_html,
         "{{HABITTOGGLES}}": habit_toggles(conn),
+        "{{TODAYRECORDS}}": today_records_html(conn),
         "{{ACTIVECOUNT}}": str(s["total"]),
         "{{MAXH}}": str(max_habits(conn)),
         "{{STAGENAME}}": cfg["name"],
