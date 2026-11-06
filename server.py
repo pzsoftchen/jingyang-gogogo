@@ -867,6 +867,27 @@ def pending_questions(conn, limit=6):
     return [dict(r) for r in rows]
 
 
+def open_questions_count(conn):
+    """待家长处理：未答、待补内容、AI 草稿未审核。"""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM questions"
+        " WHERE status IN ('ask','pending','draft')"
+    ).fetchone()["n"]
+
+
+def questions_for_parent(conn, answered_limit=8):
+    """问题罐：开放项置顶，最近已答垫底。"""
+    open_rows = conn.execute(
+        "SELECT id,question,answer,status,created,answered FROM questions"
+        " WHERE status IN ('ask','pending','draft') ORDER BY id DESC"
+    ).fetchall()
+    answered_rows = conn.execute(
+        "SELECT id,question,answer,status,created,answered FROM questions"
+        " WHERE status='answered' ORDER BY id DESC LIMIT ?", (answered_limit,)
+    ).fetchall()
+    return [dict(r) for r in list(open_rows) + list(answered_rows)]
+
+
 def auto_push_zika(conn, habit_id):
     """打卡成功后，顺手把这个习惯对应的字推到设备上。
 
@@ -1635,6 +1656,10 @@ PAGE = """<!doctype html>
   .rv button{background:none;border:1px solid var(--line);color:var(--dim);
              border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer}
   .foot{color:var(--dim);font-size:12px;text-align:center;margin-top:20px}
+  .pnudge{display:flex;justify-content:space-between;align-items:center;
+        background:var(--card);border-left:3px solid var(--pink);border-radius:10px;
+        padding:10px 12px;margin:0 0 14px;color:var(--fg);text-decoration:none;font-size:14px}
+  .pnudge span{color:var(--pink)}
   .albumLink{display:block;background:var(--card);border:1px solid var(--gold);
         border-radius:14px;padding:14px 16px;margin-bottom:14px;color:var(--gold);
         text-decoration:none;font-size:15px}
@@ -1706,10 +1731,16 @@ PAGE = """<!doctype html>
     <div class="sent">{{SENT}}</div>
   </div>
 
-  <!-- ================= 4. 他的问题（主线：好奇心） ================= -->
-  <details class="card">
-    <summary>他的问题 · 问题罐（{{QCOUNT}} 条）</summary>
-    <div style="margin-top:12px">
+  {{NUDGE}}
+
+  <!-- ================= 更多 ================= -->
+  <a class="albumLink" href="/album">📖 成长档案 · 字卡墙 / 问题册 / 打印 →</a>
+
+  <details class="card" id="more">
+    <summary>更多</summary>
+
+    <div style="margin-top:14px">
+      <div class="sub" style="margin:0 0 8px">他的问题 · 问题罐（{{QCOUNT}} 条）</div>
       <form method="post" action="/parent/question">
         <input type="text" name="question" placeholder="在公园问了什么？比如「为什么树叶会变黄」" maxlength="200">
         <button class="send" type="submit">记下来</button>
@@ -1718,15 +1749,8 @@ PAGE = """<!doctype html>
       <div style="margin-top:6px">{{QUESTIONS}}</div>
       {{CARDS}}
     </div>
-  </details>
 
-  <!-- ================= 更多 ================= -->
-  <a class="albumLink" href="/album">📖 成长档案 · 字卡墙 / 问题册 / 打印 →</a>
-
-  <details class="card">
-    <summary>更多：进度 / 识字 / 设置</summary>
-
-    <div style="margin-top:14px">
+    <div style="margin-top:18px">
       <div class="sub" style="margin:0 0 8px">连续 {{STREAK}} 天 · 最长 {{BEST}} 天（只给你看）</div>
       <div class="sub" style="margin:0 0 8px">最近 7 天</div>
       <div class="week">{{WEEK}}</div>
@@ -1878,7 +1902,8 @@ def render_page(conn, sent=""):
         approvals_html = '<div class="sub">还没有，发第一句吧。</div>'
 
     qs_html = []
-    for q in pending_questions(conn, 8):
+    parent_questions = questions_for_parent(conn)
+    for q in parent_questions:
         ans = q["answer"].strip()
         if ans:
             body = '<div class="qa">%s</div>' % ans.replace("<", "&lt;")
@@ -1938,8 +1963,11 @@ def render_page(conn, sent=""):
                          push_count_today(conn, "newchar"),
                          push_count_today(conn, "surprise")))
 
-    q_count = conn.execute(
-        "SELECT COUNT(*) AS n FROM questions WHERE status!='pending'").fetchone()["n"]
+    q_count = len(parent_questions)
+    nudge_count = open_questions_count(conn)
+    nudge_html = ('<a class="pnudge" href="#more" '
+                  'onclick="document.getElementById(\'more\').open=true">%d 个问题等你处理 '
+                  '<span>→</span></a>' % nudge_count) if nudge_count else ""
 
     # 孩子在设备上按了"有件事想告诉爸妈"
     _notes = unseen_notes(conn)
@@ -2068,6 +2096,7 @@ def render_page(conn, sent=""):
         "{{STAGEBTNS}}": stage_btns,
         "{{BUDGET}}": str(cfg["content_budget"]),
         "{{QUESTIONS}}": questions_html,
+        "{{NUDGE}}": nudge_html,
         "{{CARDS}}": cards_html,
         "{{ZIKA}}": zika_html,
         "{{SURPRISE}}": surprise_html,

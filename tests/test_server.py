@@ -709,3 +709,29 @@ class ParentPageThemeTests(HttpBase, Base):
         self.assertIn("设备在线", html)
         self.assertIn("-61 dBm", html)
 
+
+class NudgeCountTests(Base):
+    def test_count_includes_draft_pending_ask(self):
+        for status in ("ask", "pending", "draft", "answered"):
+            self.conn.execute(
+                "INSERT INTO questions(question,answer,status,created) VALUES(?,?,?,?)",
+                ("q-" + status, "", status, server.now_iso()))
+        self.conn.commit()
+        self.assertEqual(server.open_questions_count(self.conn), 3)
+
+
+class NudgeHttpTests(HttpBase, Base):
+    def test_home_shows_nudge(self):
+        self.conn.execute(
+            "INSERT INTO questions(question,answer,status,created) VALUES('为什么天会黑','',?,?)",
+            ("draft", server.now_iso()))
+        self.conn.commit()
+        code, body = self.get("/")
+        html = body.decode("utf-8")
+        self.assertIn("1 个问题等你处理", html)
+        self.assertIn('id="more"', html)
+
+    def test_no_nudge_when_none(self):
+        code, body = self.get("/")
+        self.assertNotIn("问题等你处理", body.decode("utf-8"))
+
