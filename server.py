@@ -354,6 +354,15 @@ def set_setting(conn, key, value):
     )
 
 
+def get_volume(conn):
+    """家长页音量 0–100，默认 60。"""
+    try:
+        v = int(get_setting(conn, "volume", "60"))
+    except (TypeError, ValueError):
+        v = 60
+    return max(0, min(100, v))
+
+
 def today_str():
     # 用一个明确的服务器时区，避免设备端时区问题
     return datetime.datetime.now().strftime("%Y-%m-%d")
@@ -1553,6 +1562,7 @@ def state_as_text(conn):
     # 设备 ack 后，下一次 15 秒同步再取下一条。
     for a in s["approvals"][:1]:
         lines.append("MSG=%d|%d|%s" % (a["id"], a.get("track", 0), a["from_who"]))
+    lines.append("VOL=%d" % get_volume(conn))
     # 内容包版本：设备据此判断自己的 SD 卡语音是不是最新（将来 OTA 用）
     _pack = conn.execute(
         "SELECT version FROM content_packs WHERE name='voice'").fetchone()
@@ -1791,6 +1801,13 @@ PAGE = """<!doctype html>
     <div class="sub" style="margin-top:8px">
       建议从 1 件开始，稳定两周再加。最多 {{MAXH}} 件。
     </div>
+
+    <div class="sub" style="margin:22px 0 8px">设备 · 音量</div>
+    <form method="post" action="/parent/volume">
+      <div class="sub" style="margin:0 0 8px">音量 {{VOLUME}}%</div>
+      <input type="range" name="volume" min="0" max="100" value="{{VOLUME}}" style="width:100%">
+      <button class="send" type="submit">保存音量</button>
+    </form>
 
     <form method="post" action="/parent/settings" style="margin-top:20px">
       <div class="sub" style="margin:0 0 8px">名字</div>
@@ -2107,6 +2124,7 @@ def render_page(conn, sent=""):
         "{{APPROVALS}}": approvals_html,
         "{{HABITTOGGLES}}": habit_toggles(conn),
         "{{TODAYRECORDS}}": today_records_html(conn),
+        "{{VOLUME}}": str(get_volume(conn)),
         "{{ACTIVECOUNT}}": str(s["total"]),
         "{{MAXH}}": str(max_habits(conn)),
         "{{STAGENAME}}": cfg["name"],
@@ -2187,6 +2205,7 @@ class Handler(BaseHTTPRequestHandler):
                     "stagenone": "⚠️ 未知阶段。",
                     "hab0": "⚠️ 至少要开 1 件。",
                     "revoked": "↩️ 已撤回该记录（只在家长页留痕，设备端不会提示孩子）",
+                    "volsaved": "✅ 音量已保存，设备下次同步会应用。",
                     "qadd": "✅ 记下了。回家再一起找答案——别在路上就给答案，先问问他怎么想。",
                     "qfill": "✅ 问题补上了，现在可以让 AI 起草答案。",
                     "nseen": "✅ 已标记为已读。",
@@ -2433,6 +2452,13 @@ class Handler(BaseHTTPRequestHandler):
                              ("%s@%s" % (hid, day), now_iso()))
                 conn.commit()
                 return self._send(303, "", headers={"Location": "/?sent=revoked"})
+
+            if path == "/parent/volume":
+                form = self._form()
+                v = max(0, min(100, self._int(form.get("volume"))))
+                set_setting(conn, "volume", str(v))
+                conn.commit()
+                return self._send(303, "", headers={"Location": "/?sent=volsaved"})
 
             if path == "/parent/settings":
                 form = self._form()

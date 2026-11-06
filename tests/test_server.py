@@ -20,6 +20,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+import urllib.parse
 import urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -401,9 +402,10 @@ class HttpBase:
         except urllib.error.HTTPError as e:
             return e.code, e.read()
 
-    def post(self, path):
+    def post(self, path, data=None):
         url = "http://127.0.0.1:%d%s" % (self.port, path)
-        req = urllib.request.Request(url, data=b"", method="POST")
+        body = urllib.parse.urlencode(data).encode("utf-8") if data else b""
+        req = urllib.request.Request(url, data=body, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, r.read()
@@ -561,7 +563,7 @@ class HttpTests(HttpBase, Base):
         """老固件遇到新字段要能忽略——这条保证'只追加不改动'的约定可验证。"""
         text = server.state_as_text(self.conn)
         known = ("V=", "DATE=", "CHILD=", "COACH=", "STREAK=", "DONE=", "Q=",
-                 "WEEK=", "H=", "MSG=", "PACK=", "END")
+                 "WEEK=", "H=", "MSG=", "PACK=", "VOL=", "END")
         for line in text.splitlines():
             if not line:
                 continue
@@ -758,4 +760,25 @@ class MoreHabitsTests(HttpBase, Base):
         code, body = self.get("/")
         html = body.decode("utf-8")
         self.assertNotIn('action="/parent/surprise_skip"', html)
+
+
+class VolumeTests(Base):
+    def test_default_is_60(self):
+        self.assertEqual(server.get_volume(self.conn), 60)
+
+    def test_clamps_and_state_line(self):
+        server.set_setting(self.conn, "volume", "-10")
+        self.conn.commit()
+        self.assertEqual(server.get_volume(self.conn), 0)
+        server.set_setting(self.conn, "volume", "500")
+        self.conn.commit()
+        self.assertEqual(server.get_volume(self.conn), 100)
+        self.assertIn("VOL=100", server.state_as_text(self.conn))
+
+
+class VolumeHttpTests(HttpBase, Base):
+    def test_parent_volume_route(self):
+        code, _ = self.post("/parent/volume", {"volume": "45"})
+        self.assertEqual(code, 200)
+        self.assertEqual(server.get_volume(self.conn), 45)
 
