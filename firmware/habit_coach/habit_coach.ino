@@ -281,6 +281,31 @@ void say(int track);
 Audio audio;
 #endif
 
+// 家长页音量（0–100）：夜间压到 60%，由设备本地时间决定。
+#if USE_SD_AUDIO
+bool audioOk = false;
+#endif
+int volPct = 60;
+int volApplied = -1;
+
+bool isNightVolume() {
+  struct tm t;
+  if (!getLocalTime(&t, 10)) return false;
+  return t.tm_hour >= 20 || t.tm_hour < 6;
+}
+
+void applyVolume() {
+  int v = volPct;
+  if (isNightVolume()) v = v * 60 / 100;
+  if (v == volApplied) return;
+  volApplied = v;
+#if USE_SD_AUDIO
+  if (audioOk) audio.setVolume((uint8_t)map(v, 0, 100, 0, 21));
+#elif USE_DFPLAYER
+  if (mp3Ok) mp3.volume((uint8_t)map(v, 0, 100, 0, 30));
+#endif
+}
+
 // 兼容 ESP32 Arduino core 2.x 与 3.x 的 LEDC API
 void buzzerInit() {
 #if BUZZER >= 0
@@ -306,8 +331,6 @@ void beep(uint16_t freq, uint16_t ms) {
 }
 
 #if USE_SD_AUDIO
-bool audioOk = false;
-
 // 1.85：TF 卡（SDMMC 1 线）+ PCM5101 I2S，播 /mp3/xxxx.mp3
 void audioInit() {
   SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
@@ -316,8 +339,9 @@ void audioInit() {
     return;
   }
   audio.setPinout(I2S_BCK, I2S_LRCK, I2S_DIN);
-  audio.setVolume(12);          // 0-21；孩子房间建议 8-12
   audioOk = true;
+  volApplied = -1;
+  applyVolume();
   Serial.println("[audio] TF + I2S OK");
 }
 
@@ -955,6 +979,10 @@ bool syncState() {
     pos = nl + 1;
 
     if (line.startsWith("V="))          protoVer = line.substring(2).toInt();
+    else if (line.startsWith("VOL=")) {
+      int v = line.substring(4).toInt();
+      if (v >= 0 && v <= 100) { volPct = v; applyVolume(); }
+    }
     else if (line.startsWith("PACK=")) {
       packVer = line.substring(5);
       // 设备上记一份，将来 OTA 换语音包时据此判断要不要下载
@@ -1310,7 +1338,8 @@ void setup() {
   delay(1200);                       // DFPlayer 上电需要时间
   mp3Ok = mp3.begin(Serial1);
   if (mp3Ok) {
-    mp3.volume(22);
+    volApplied = -1;
+    applyVolume();
     mp3.EQ(DFPLAYER_EQ_NORMAL);
     Serial.println("[mp3] DFPlayer OK");
   } else {

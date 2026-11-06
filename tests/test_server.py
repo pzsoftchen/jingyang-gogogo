@@ -782,3 +782,13 @@ class VolumeHttpTests(HttpBase, Base):
         self.assertEqual(code, 200)
         self.assertEqual(server.get_volume(self.conn), 45)
 
+
+class FirmwareVolumeTests(unittest.TestCase):
+    def test_firmware_parses_vol_and_applies_volume(self):
+        src = open(os.path.join(os.path.dirname(HERE), "firmware", "habit_coach",
+                                "habit_coach.ino"), encoding="utf-8").read()
+        self.assertIn('line.startsWith("VOL=")', src)
+        self.assertIn("void applyVolume()", src)
+        self.assertIn("audio.setVolume", src)
+        self.assertIn("mp3.volume", src)
+
