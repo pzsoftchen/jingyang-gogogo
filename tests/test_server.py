@@ -800,14 +800,23 @@ class FirmwareVolumeTests(unittest.TestCase):
         self.assertIn("mp3.volume", src)
 
     def test_firmware_volume_rechecks_night_and_validates(self):
-        src = open(os.path.join(os.path.dirname(HERE), "firmware", "habit_coach",
+        root = os.path.dirname(HERE)
+        src = open(os.path.join(root, "firmware", "habit_coach",
                                 "habit_coach.ino"), encoding="utf-8").read()
-        self.assertIn("lastVolCheck", src, "音量必须定期重算，不能只在同步时算")
-        self.assertIn("isDigit", src, "非法 VOL= 不能被当成 0")
-        self.assertIn("volNight", src, "断网时沿用最后一次昼夜判断")
-        self.assertIn("(v * 21 + 50) / 100", src, "1.85 音量映射应四舍五入")
-        self.assertIn("(v * 30 + 50) / 100", src, "DFPlayer 音量映射应四舍五入")
-        self.assertIn("t.tm_min < 30", src, "夜间边界应为 06:30")
+        theme = open(os.path.join(root, "firmware", "habit_coach",
+                                  "ui_theme.cpp"), encoding="utf-8").read()
+        self.assertIn("lastPhaseCheck", src, "音量必须随四幕定期重算，不能只在同步时算")
+        self.assertIn("updatePhase(false)", src, "时段轮询要周期性调用")
+        self.assertIn("parse_volume_pct", src, "非法 VOL= 不能被当成 0")
+        self.assertIn("nightMode", src, "断网/夜间沿用最后一次昼夜判断")
+        self.assertIn("volume_steps(volumePct, 21, nightMode)", src,
+                      "1.85 音量映射")
+        self.assertIn("volume_steps(volumePct, 30, nightMode)", src,
+                      "DFPlayer 音量映射")
+        self.assertIn("(percent * maxSteps + 50) / 100", theme,
+                      "音量映射应四舍五入")
+        self.assertIn("390", theme, "清晨边界应为 06:30")
+        self.assertIn("1200", theme, "夜间起点应为 20:00")
 
 
 class QuickAlbumThemeTests(HttpBase, Base):

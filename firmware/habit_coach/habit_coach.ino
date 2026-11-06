@@ -30,7 +30,9 @@
 #include <Arduino_GFX_Library.h>
 #include "habit_icons.h"      // 习惯 emoji 图标（由 tools/gen_icons.py 生成）
 #include "st77916_185c_init.h" // 1.85C 专用 ST77916 厂商初始化表
+#include "ui_theme.h"         // 四幕时段/调色板/弧线/音量纯函数
 #include <esp_heap_caps.h>
+#include <pgmspace.h>
 #if __has_include(<esp_arduino_version.h>)
 #include <esp_arduino_version.h>
 #endif
@@ -84,9 +86,11 @@
   #define SCREEN_H     240
 #endif
 
-// 布局缩放：所有绘图坐标以 240 为设计基准，乘这个系数适配 360
+// 布局缩放：旧绘图坐标以 240 为设计基准，乘这个系数适配 360
 #define UI_K ((float)SCREEN_W / 240.0f)
 #define K(v) ((int)((v) * UI_K))
+// 新主题（小豆豆的一天）以 360 设计稿为基准
+#define S(v) ((int)((v) * SCREEN_W / 360.0f))
 
 // ======================= 引脚 =======================
 #if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
@@ -180,6 +184,9 @@ Habit hab[MAX_HABITS];
 int   habCount = 0;
 bool  remindedToday[MAX_HABITS] = {false, false, false, false};
 int   selected = 0;
+int   habitX[4] = {0, 0, 0, 0};   // 底部习惯贴纸中心（命中测试用）
+int   habitY[4] = {0, 0, 0, 0};
+int   habitStickerR = 30;
 
 // 问题卡模式：设备不解析中文，只把服务器画好的 240x240 RGB565 贴到屏上
 bool  cardMode = false;
@@ -211,6 +218,7 @@ int seqN = 0, seqIdx = 0;
 #define VOICE_ONE_LEFT    9
 #define VOICE_TEACH_ME   11
 #define VOICE_THANKS     12
+#define VOICE_ALREADY_DONE 66  // 「这个已经做过啦」
 #define VOICE_MSG_GENERIC 19
 #define VOICE_EGG_BASE   400   // 0401~0420 彩蛋语音（低概率触发）
 #define VOICE_EGG_COUNT   20
@@ -226,16 +234,7 @@ int seqN = 0, seqIdx = 0;
 enum { EXPR_IDLE = 0, EXPR_HAPPY, EXPR_BLINK, EXPR_TALK, EXPR_SURPRISED,
        EXPR_WINK, EXPR_SLEEPY, EXPR_CURIOUS };
 
-// ======================= 调色板 =======================
-#define C_BG       0x0861   // 深夜蓝黑
-#define C_FACE     0xFE60   // 暖黄
-#define C_INK      0x18E3
-#define C_EXPR     0xFFE0   // 表情线条：亮黄，保证在深色背景上可见
-#define C_PUPIL    0x0861   // 眼睛高光/瞳孔：与背景同色
-#define C_STAR_ON  0xFFE0
-#define C_STAR_OFF 0x2945
-#define C_TXT      0xC618
-#define C_ACCENT   0xFD20
+// 主界面/太阳/庆祝动画均改用 ui_theme 的四幕 Palette，不再保留旧 C_* 常量。
 
 // ======================= 语音 =======================
 #if USE_DFPLAYER
@@ -252,7 +251,17 @@ bool touchReady = false;
 
 // ======================= 状态 =======================
 Preferences prefs;
-bool weekDone[7] = {false, false, false, false, false, false, false};  // 近 7 天是否完成
+bool weekDone[7] = {false, false, false, false, false, false, false};  // 近 7 天是否完成（旧字段）
+bool weekCalValid = false;                                             // 服务器是否下发 WEEK_CAL
+bool weekCal[7] = {false, false, false, false, false, false, false};   // 本周一到周日
+int  weekday = 0;             // 1=周一 … 7=周日；0=未知
+int  volumePct = -1;          // 家长页音量 0-100；-1=服务器未下发
+bool nightMode = true;        // 与冷启动 currentPhase=NIGHT 一致；时段引擎会更新
+Phase currentPhase = PHASE_NIGHT;   // 冷启动先按夜间，NTP 成功后再切
+Palette oldPalette;
+unsigned long phaseChangedAt = 0;
+unsigned long lastPhaseCheck = 0;
+int bounceIdx = -1, bounceDy = 0;   // 贴纸轻弹动画
 int  streak = 0;
 int  protoVer = 1;        // 服务器协议版本（V=2）
 String packVer = "";      // 服务器上的语音包版本（PACK=voice.1）
@@ -281,40 +290,6 @@ void say(int track);
 Audio audio;
 #endif
 
-// 家长页音量（0–100）：夜间压到 60%，由设备本地时间决定。
-#if USE_SD_AUDIO
-bool audioOk = false;
-#endif
-int volPct = 60;
-int volApplied = -1;
-bool volNight = false;      // 断网时沿用最后一次昼夜判断
-
-bool isNightVolume() {
-  struct tm t;
-  if (getLocalTime(&t, 10)) {
-    bool n = t.tm_hour >= 20 || t.tm_hour < 6 ||
-             (t.tm_hour == 6 && t.tm_min < 30);
-    if (n != volNight) {
-      volNight = n;
-      prefs.putBool("night", volNight);
-    }
-    return volNight;
-  }
-  return volNight;
-}
-
-void applyVolume() {
-  int v = volPct;
-  if (isNightVolume()) v = v * 60 / 100;
-  if (v == volApplied) return;
-  volApplied = v;
-#if USE_SD_AUDIO
-  if (audioOk) audio.setVolume((uint8_t)((v * 21 + 50) / 100));
-#elif USE_DFPLAYER
-  if (mp3Ok) mp3.volume((uint8_t)((v * 30 + 50) / 100));
-#endif
-}
-
 // 兼容 ESP32 Arduino core 2.x 与 3.x 的 LEDC API
 void buzzerInit() {
 #if BUZZER >= 0
@@ -340,6 +315,8 @@ void beep(uint16_t freq, uint16_t ms) {
 }
 
 #if USE_SD_AUDIO
+bool audioOk = false;
+
 // 1.85：TF 卡（SDMMC 1 线）+ PCM5101 I2S，播 /mp3/xxxx.mp3
 void audioInit() {
   SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
@@ -348,8 +325,8 @@ void audioInit() {
     return;
   }
   audio.setPinout(I2S_BCK, I2S_LRCK, I2S_DIN);
+  audio.setVolume(12);          // 默认 0-21；服务器下发 VOL 后覆盖
   audioOk = true;
-  volApplied = -1;
   applyVolume();
   Serial.println("[audio] TF + I2S OK");
 }
@@ -361,6 +338,16 @@ void audioLoop() {
 void audioInit() {}
 void audioLoop() {}
 #endif
+
+// 家长页音量 0-100 → 板型对应的音量档位；夜间自动压到 60%
+void applyVolume() {
+  if (volumePct < 0) return;
+#if USE_SD_AUDIO
+  if (audioOk) audio.setVolume(volume_steps(volumePct, 21, nightMode));
+#elif USE_DFPLAYER
+  if (mp3Ok) mp3.volume(volume_steps(volumePct, 30, nightMode));
+#endif
+}
 
 void say(int track) {
 #if USE_SD_AUDIO
@@ -406,84 +393,127 @@ void startSeq(int idx) {
 
 void cancelSeq() { seqN = 0; seqIdx = 0; }
 
-// ======================= 绘制 =======================
-// 设计基准是 240×240，所有坐标乘 K() 适配 360×360
-void drawEyes(int mode) {
-  int lx = K(88), rx = K(152), ey = K(92);
-  int e = K(14), hi = K(4);
-  // 眨眼：一只闭一只圆
+// ======================= 绘制：小豆豆（太阳角色） =======================
+// 五官颜色必须与太阳本体有对比：深棕五官 + 太阳色高光
+void drawSunFace(int mode, const Palette &p, const SunGeom &g) {
+  int lx = g.cx - g.eyeDx, rx = g.cx + g.eyeDx;
+  int ey = g.cy + g.eyeDy;
+  int e = g.eyeR;
+  int hi = (e / 3 > 1) ? e / 3 : 1;
+
   if (mode == EXPR_WINK) {
-    ui->drawLine(lx - e, ey, lx + e, ey, C_EXPR);
-    ui->fillCircle(rx, ey, K(12), C_EXPR);
-    ui->fillCircle(rx + hi, ey - hi, hi, C_PUPIL);
-    return;
+    ui->drawLine(lx - e, ey, lx + e, ey, p.face);
+    ui->fillCircle(rx, ey, e, p.face);
+    ui->fillCircle(rx + hi, ey - hi, hi, p.sun);
+  } else if (mode == EXPR_CURIOUS) {
+    ui->fillCircle(lx, ey, e + 2, p.face);
+    ui->fillCircle(rx, ey, e - 2, p.face);
+    ui->fillCircle(lx + hi, ey - hi, hi, p.sun);
+    ui->fillCircle(rx + 1, ey - 1, hi, p.sun);
+  } else if (mode == EXPR_SURPRISED) {
+    ui->fillCircle(lx, ey, e + 3, p.face);
+    ui->fillCircle(rx, ey, e + 3, p.face);
+    ui->fillCircle(lx + hi, ey - hi * 2, hi, p.sun);
+    ui->fillCircle(rx + hi, ey - hi * 2, hi, p.sun);
+  } else if (mode == 2 || mode == EXPR_SLEEPY) {
+    ui->drawLine(lx - e, ey, lx + e, ey, p.face);
+    ui->drawLine(rx - e, ey, rx + e, ey, p.face);
+  } else if (mode == 1 || mode == EXPR_HAPPY) {
+    ui->drawLine(lx - e, ey + 2, lx, ey - 3, p.face);
+    ui->drawLine(lx, ey - 3, lx + e, ey + 2, p.face);
+    ui->drawLine(rx - e, ey + 2, rx, ey - 3, p.face);
+    ui->drawLine(rx, ey - 3, rx + e, ey + 2, p.face);
+  } else {
+    ui->fillCircle(lx, ey, e, p.face);
+    ui->fillCircle(rx, ey, e, p.face);
+    ui->fillCircle(lx + hi, ey - hi, hi, p.sun);
+    ui->fillCircle(rx + hi, ey - hi, hi, p.sun);
   }
-  // 好奇：一大一小
-  if (mode == EXPR_CURIOUS) {
-    ui->fillCircle(lx, ey, K(14), C_EXPR);
-    ui->fillCircle(rx, ey, K(8), C_EXPR);
-    ui->fillCircle(lx + hi, ey - hi, hi, C_PUPIL);
-    ui->fillCircle(rx + K(2), ey - K(2), K(3), C_PUPIL);
-    return;
-  }
-  // 惊讶：更大的圆眼 + 高光偏上
+
+  int cx = g.cx, my = g.cy + g.mouthY;
   if (mode == EXPR_SURPRISED) {
-    ui->fillCircle(lx, ey, K(15), C_EXPR);
-    ui->fillCircle(rx, ey, K(15), C_EXPR);
-    ui->fillCircle(lx + hi, ey - K(6), hi, C_PUPIL);
-    ui->fillCircle(rx + hi, ey - K(6), hi, C_PUPIL);
-    return;
-  }
-  if (mode == 2 || mode == EXPR_SLEEPY) {
-    ui->drawLine(lx - e, ey, lx + e, ey, C_EXPR);
-    ui->drawLine(rx - e, ey, rx + e, ey, C_EXPR);
-    return;
-  }
-  if (mode == 1 || mode == EXPR_HAPPY) {
-    ui->drawLine(lx - e, ey + K(6), lx, ey - K(8), C_EXPR);
-    ui->drawLine(lx, ey - K(8), lx + e, ey + K(6), C_EXPR);
-    ui->drawLine(rx - e, ey + K(6), rx, ey - K(8), C_EXPR);
-    ui->drawLine(rx, ey - K(8), rx + e, ey + K(6), C_EXPR);
-    return;
-  }
-  ui->fillCircle(lx, ey, K(12), C_EXPR);
-  ui->fillCircle(rx, ey, K(12), C_EXPR);
-  ui->fillCircle(lx + hi, ey - hi, hi, C_PUPIL);
-  ui->fillCircle(rx + hi, ey - hi, hi, C_PUPIL);
-}
-
-void drawMouth(int mode) {
-  int cx = SCREEN_W / 2, my = K(132);
-  // 惊讶：小圆嘴
-  if (mode == EXPR_SURPRISED) { ui->fillCircle(cx, my + K(2), K(9), C_EXPR); return; }
-  // 好奇：歪嘴
-  if (mode == EXPR_CURIOUS) {
-    ui->drawLine(cx - K(10), my + K(4), cx + K(2), my - K(2), C_EXPR);
-    ui->drawLine(cx + K(2), my - K(2), cx + K(13), my + K(3), C_EXPR);
-    return;
-  }
-  // 困：小弧 + zz
-  if (mode == EXPR_SLEEPY) {
-    ui->drawLine(cx - K(8), my + K(3), cx, my - K(2), C_EXPR);
-    ui->drawLine(cx, my - K(2), cx + K(8), my + K(3), C_EXPR);
-    ui->setTextColor(C_ACCENT);
+    ui->fillCircle(cx, my, e, p.face);
+  } else if (mode == EXPR_CURIOUS) {
+    ui->drawLine(cx - e, my + 2, cx + 1, my - 1, p.face);
+    ui->drawLine(cx + 1, my - 1, cx + e + 1, my + 1, p.face);
+  } else if (mode == EXPR_SLEEPY) {
+    ui->drawLine(cx - e, my, cx, my - 3, p.face);
+    ui->drawLine(cx, my - 3, cx + e, my, p.face);
+    ui->setTextColor(p.accent);
     ui->setTextSize(1);
-    ui->setCursor(cx + K(28), my - K(26));
+    ui->setCursor(cx + g.cheekDx, my - g.cheekDy);
     ui->print("z z");
-    return;
+  } else if (mode == 1 || mode == EXPR_HAPPY) {
+    ui->fillCircle(cx, my, e + 4, p.face);
+    ui->fillCircle(cx, my - 3, e + 4, p.sun);
+  } else if (mode == 3) {
+    ui->fillCircle(cx, my, e - 1, p.face);
+  } else {
+    ui->drawLine(cx - e - 2, my, cx - 2, my + 3, p.face);
+    ui->drawLine(cx - 2, my + 3, cx + 2, my + 3, p.face);
+    ui->drawLine(cx + 2, my + 3, cx + e + 2, my, p.face);
   }
-  if (mode == 1 || mode == EXPR_HAPPY) {
-    ui->fillCircle(cx, my, K(20), C_EXPR);
-    ui->fillCircle(cx, my - K(8), K(20), C_PUPIL);
-    return;
-  }
-  if (mode == 3) { ui->fillCircle(cx, my + K(2), K(8), C_EXPR); return; }
-  ui->drawLine(cx - K(16), my, cx - K(6), my + K(7), C_EXPR);
-  ui->drawLine(cx - K(6), my + K(7), cx + K(6), my + K(7), C_EXPR);
-  ui->drawLine(cx + K(6), my + K(7), cx + K(16), my, C_EXPR);
 }
 
-void drawStar(int cx, int cy, int r, bool filled, bool sel) {
+void drawSun(const Palette &p) {
+  SunGeom g = sun_geometry(SCREEN_W, SCREEN_H);
+  int rx[8], ry[8];
+  sun_ray_endpoints(currentPhase, g.cx, g.cy, g.bodyR, g.rayR, rx, ry);
+  int startR = g.bodyR - S(4);
+  for (int i = 0; i < 8; i++) {
+    float dx = (float)(rx[i] - g.cx), dy = (float)(ry[i] - g.cy);
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.0f) continue;
+    int sx = g.cx + (int)(dx * startR / len);
+    int sy = g.cy + (int)(dy * startR / len);
+    ui->drawLine(sx, sy, rx[i], ry[i], p.ray);
+    ui->fillCircle(rx[i], ry[i], S(3), p.ray);
+  }
+  ui->fillCircle(g.cx, g.cy, g.bodyR, p.sun);
+  ui->fillCircle(g.cx - g.cheekDx, g.cy + g.cheekDy, g.cheekR, p.cheek);
+  ui->fillCircle(g.cx + g.cheekDx, g.cy + g.cheekDy, g.cheekR, p.cheek);
+  drawSunFace(expr, p, g);
+}
+
+void drawBackground(const Palette &p) {
+  const int bands = 24;
+  for (int i = 0; i < bands; i++) {
+    int y0 = SCREEN_H * i / bands;
+    int y1 = SCREEN_H * (i + 1) / bands;
+    uint8_t t = (uint8_t)(i * 255 / (bands - 1));
+    ui->fillRect(0, y0, SCREEN_W, y1 - y0, lerp565(p.bgTop, p.bgBottom, t));
+  }
+}
+
+// 顶部 7 点：周一到周日，沿缓弧排布；今天更大 + 珊瑚外圈
+void drawWeekArc(const Palette &p) {
+  int x[7], y[7];
+  week_dot_positions(SCREEN_W / 2, SCREEN_H / 2, S(150), x, y);
+  for (int i = 0; i < 7; i++) {
+    WeekDotState st = weekCalValid
+        ? week_dot_state(i, true, weekCal, weekday)
+        : (weekDone[i] ? WEEK_DONE : WEEK_FUTURE);
+    int r = week_dot_radius(st, S(7));
+    if (st == WEEK_DONE) {
+      ui->fillCircle(x[i], y[i], r, p.weekDone);
+    } else if (st == WEEK_TODAY) {
+      ui->fillCircle(x[i], y[i], r, p.weekToday);
+      ui->drawCircle(x[i], y[i], S(12), p.weekTodayRing);
+    } else if (st == WEEK_TODAY_DONE) {
+      ui->fillCircle(x[i], y[i], r, p.weekDone);
+      ui->drawCircle(x[i], y[i], S(12), p.weekTodayRing);
+      int u = (r / 3 > 1) ? r / 3 : 1;
+      ui->drawLine(x[i] - u, y[i], x[i], y[i] + u, p.bgTop);
+      ui->drawLine(x[i], y[i] + u, x[i] + 2 * u, y[i] - u, p.bgTop);
+    } else {
+      ui->drawCircle(x[i], y[i], r, p.weekFuture);
+    }
+  }
+  ui->fillCircle(S(18), S(18), S(4), wifiOk ? 0x07E0 : 0x4208);
+}
+
+void drawStar(int cx, int cy, int r, bool filled, bool sel,
+              uint16_t onColor, uint16_t offColor) {
   int px[10], py[10];
   for (int i = 0; i < 10; i++) {
     float a = -PI / 2 + i * PI / 5.0f;
@@ -493,10 +523,10 @@ void drawStar(int cx, int cy, int r, bool filled, bool sel) {
   }
   for (int i = 0; i < 10; i++) {
     int j = (i + 1) % 10;
-    ui->drawLine(px[i], py[i], px[j], py[j], filled ? C_STAR_ON : C_STAR_OFF);
+    ui->drawLine(px[i], py[i], px[j], py[j], filled ? onColor : offColor);
   }
-  if (filled) for (int i = 0; i < 10; i++) ui->drawLine(cx, cy, px[i], py[i], C_STAR_ON);
-  if (sel) ui->drawCircle(cx, cy, r + K(7), C_ACCENT);
+  if (filled) for (int i = 0; i < 10; i++) ui->drawLine(cx, cy, px[i], py[i], onColor);
+  if (sel) ui->drawCircle(cx, cy, r + K(7), onColor);
 }
 
 void renderCard();   // 前置声明
@@ -509,29 +539,126 @@ int iconIndexOf(const String &id) {
   return -1;
 }
 
-void drawHabitIcon(int cx, int cy, const String &id, bool done, bool sel) {
-  int rBg = K(24);
-  ui->fillCircle(cx, cy, rBg, 0x10A2);
+// 图标位图是深色底合成的；画到奶油/夜间贴纸上时把底色调成透明
+void drawIconBitmap(int x, int y, int idx) {
+  const uint16_t *src = (const uint16_t *)HABIT_ICON_PIX[idx];
+  const int bw = (HABIT_ICON_W + 7) / 8;
+  uint8_t mask[bw * HABIT_ICON_H];
+  for (int yy = 0; yy < HABIT_ICON_H; yy++) {
+    for (int xx = 0; xx < bw; xx++) {
+      uint8_t b = 0;
+      for (int k = 0; k < 8; k++) {
+        int px = xx * 8 + k;
+        b <<= 1;
+        if (px < HABIT_ICON_W &&
+            icon_pixel_opaque(pgm_read_word(&src[yy * HABIT_ICON_W + px]))) {
+          b |= 1;
+        }
+      }
+      mask[yy * bw + xx] = b;
+    }
+  }
+  ui->draw16bitRGBBitmapWithMask(x, y, src, mask, HABIT_ICON_W, HABIT_ICON_H);
+}
 
-  int idx = iconIndexOf(id);
+// 奶油贴纸：图标 + 已完成右上角小星星（不再画大双圈）
+void drawHabitIcon(int i, const Palette &p) {
+  if (i < 0 || i >= habCount) return;
+  int cx = habitX[i], cy = habitY[i] + ((i == bounceIdx) ? bounceDy : 0);
+  int r = habitStickerR;
+  ui->fillCircle(cx, cy, r, p.sticker);
+  ui->drawCircle(cx, cy, r, p.stickerEdge);
+  ui->drawCircle(cx, cy, r - 1, p.stickerEdge);
+
+  int idx = iconIndexOf(hab[i].id);
+  int size = r * 2 - S(8);
+  if (size < 1) size = 1;
   if (idx >= 0) {
-    ui->draw16bitRGBBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2,
-                           (const uint16_t *)HABIT_ICON_PIX[idx], HABIT_ICON_W, HABIT_ICON_H);
+    if (size >= HABIT_ICON_W) {
+      drawIconBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2, idx);
+    } else {
+      // 最近邻缩放：240 板上把 40x40 图标缩进更小的贴纸；深色底跳过
+      const uint8_t *src = (const uint8_t *)HABIT_ICON_PIX[idx];
+      for (int y = 0; y < size; y++) {
+        int sy = y * HABIT_ICON_H / size;
+        for (int x = 0; x < size; x++) {
+          int sx = x * HABIT_ICON_W / size;
+          uint16_t c = pgm_read_word(src + (sy * HABIT_ICON_W + sx) * 2);
+          if (!icon_pixel_opaque(c)) continue;
+          ui->drawPixel(cx - size / 2 + x, cy - size / 2 + y, c);
+        }
+      }
+    }
   } else {
-    drawStar(cx, cy, K(16), done, false);
+    drawStar(cx, cy, S(16), hab[i].done, false, p.accent, p.weekFuture);
   }
 
-  if (done) {
-    ui->drawCircle(cx, cy, rBg, C_STAR_ON);
-    ui->drawCircle(cx, cy, rBg - 1, C_STAR_ON);
-    ui->fillCircle(cx + K(17), cy + K(17), K(8), C_STAR_ON);
-    ui->drawLine(cx + K(13), cy + K(17), cx + K(16), cy + K(21), C_INK);
-    ui->drawLine(cx + K(16), cy + K(21), cx + K(21), cy + K(13), C_INK);
-  } else {
-    ui->drawCircle(cx, cy, rBg, C_STAR_OFF);
+  if (hab[i].done) {
+    int bx = cx + r - S(8), by = cy - r + S(8);
+    ui->fillCircle(bx, by, S(7), p.accent);
+    int u = (S(3) > 0) ? S(3) : 2;
+    ui->drawLine(bx - u, by, bx, by + u, p.bgTop);
+    ui->drawLine(bx, by + u, bx + 2 * u, by - u, p.bgTop);
   }
 
-  if (sel) ui->drawCircle(cx, cy, rBg + K(5), C_ACCENT);
+#if HAS_BUTTONS
+  if (i == selected) ui->drawCircle(cx, cy, r + S(4), p.weekToday);
+#endif
+}
+
+void animateStickerBounce(int idx) {
+  if (idx < 0 || idx >= habCount) return;
+  const int offs[4] = {0, -S(3), -S(1), 0};
+  bounceIdx = idx;
+  for (int f = 0; f < 4; f++) {
+    bounceDy = offs[f];
+    audioLoop();                        // 动画期间不能饿着 I2S
+    render();
+    delay(40);
+  }
+  bounceIdx = -1;
+  bounceDy = 0;
+  needRedraw = true;
+}
+
+void animateStarFlight(int fromX, int fromY, int toX, int toY) {
+  Palette p = palette_for_phase(currentPhase);
+  int frames = animation_frames(15, nightMode);   // 约 0.7 秒，夜间减半
+  for (int f = 0; f < frames; f++) {
+    float t = (frames > 1) ? (float)f / (frames - 1) : 1.0f;
+    int x = fromX + (int)((toX - fromX) * t);
+    int y = fromY + (int)((toY - fromY) * t) - (int)(sinf(t * PI) * S(20));
+    audioLoop();
+    render();
+    drawStar(x, y, S(8), true, false, p.accent, p.weekFuture);
+    if (canvasOk) canvas->flush();
+    delay(20);
+  }
+  needRedraw = true;
+}
+
+void drawHabitArc(const Palette &p) {
+  habitStickerR = habit_sticker_radius(SCREEN_W);
+  habit_arc_positions(habCount, SCREEN_W / 2, SCREEN_H * 17 / 36, S(140),
+                      habitX, habitY);
+  if (habCount == 0) {
+    ui->setTextColor(p.text);
+    ui->setTextSize(2);
+    ui->setCursor(K(46), K(172));
+    ui->print("SYNCING");
+    return;
+  }
+  for (int i = 0; i < habCount; i++) drawHabitIcon(i, p);
+}
+
+int hitHabit(int x, int y) {
+  return habit_hit_test(x, y, habitX, habitY, habCount,
+                        habitStickerR + S(8));
+}
+
+bool hitSun(int x, int y) {
+  SunGeom g = sun_geometry(SCREEN_W, SCREEN_H);
+  return circle_hit(x, y, g.cx, g.cy, S(60));
 }
 
 // ---------- 庆祝动画：4 种图案轮换 ----------
@@ -551,10 +678,11 @@ void drawHeart(int cx, int cy, int r, uint16_t col) {
 
 void playCelebration(int kind) {
   // kind: 0 星星雨 1 爱心雨 2 emoji 图标雨 3 彩纸
+  Palette cp = palette_for_phase(currentPhase);
   const int N = 16;
   int px[N], py[N], spd[N], rot[N];
   uint16_t col[N];
-  const uint16_t palette[5] = {C_STAR_ON, 0xFE60, 0xFD20, 0x07FF, 0xF81F};
+  const uint16_t palette[5] = {cp.weekDone, cp.sun, cp.accent, 0x07FF, 0xF81F};
   int w = SCREEN_W, h = SCREEN_H;
   for (int i = 0; i < N; i++) {
     px[i] = random(K(16), w - K(16));
@@ -566,24 +694,26 @@ void playCelebration(int kind) {
   int iconPool[4];
   for (int i = 0; i < 4; i++) iconPool[i] = random(0, HABIT_ICON_COUNT);
 
-  for (int f = 0; f < 42; f++) {
-    ui->fillScreen(C_BG);
-    drawEyes(EXPR_HAPPY);
-    drawMouth(EXPR_HAPPY);
+  int savedExpr = expr;
+  expr = EXPR_HAPPY;
+  int frames = animation_frames(42, nightMode);   // 夜间减半
+  int speedMul = nightMode ? 2 : 1;
+  for (int f = 0; f < frames; f++) {
+    audioLoop();
+    drawBackground(cp);
+    drawSun(cp);
     for (int i = 0; i < N; i++) {
-      int y = py[i] + f * spd[i];
+      int y = py[i] + f * spd[i] * speedMul;
       int x = px[i] + (int)(sin((f + i * 7) / 6.0f) * K(6));
       if (y < 0 || y > h) continue;
       if (kind == 0) {
-        drawStar(x, y, K(9), true, false);
+        drawStar(x, y, K(9), true, false, cp.accent, cp.weekFuture);
       } else if (kind == 1) {
         drawHeart(x, y, K(9), col[i]);
       } else if (kind == 2) {
         int idx = iconPool[i % 4];
         if (y > K(HABIT_ICON_H / 2) && y < h - K(HABIT_ICON_H / 2)) {
-          ui->draw16bitRGBBitmap(x - HABIT_ICON_W / 2, y - HABIT_ICON_H / 2,
-                                 (const uint16_t *)HABIT_ICON_PIX[idx],
-                                 HABIT_ICON_W, HABIT_ICON_H);
+          drawIconBitmap(x - HABIT_ICON_W / 2, y - HABIT_ICON_H / 2, idx);
         }
       } else {
         int s2 = K(6);
@@ -593,52 +723,38 @@ void playCelebration(int kind) {
     if (canvasOk) canvas->flush();
     delay(30);
   }
+  expr = savedExpr;
   needRedraw = true;
 }
 
 void render() {
   if (cardMode) { renderCard(); return; }
-  ui->fillScreen(C_BG);
-
-  // 顶部：本周 7 个格子
-  int dw = K(24), dx0 = SCREEN_W / 2 - 3 * dw, topY = K(34), dotR = K(9);
-  for (int i = 0; i < 7; i++) {
-    int x = dx0 + i * dw;
-    if (weekDone[i]) ui->fillCircle(x, topY, dotR, C_STAR_ON);
-    else             ui->drawCircle(x, topY, dotR, C_STAR_OFF);
+  Palette target = palette_for_phase(currentPhase);
+  Palette p = target;
+  if (phaseChangedAt) {
+    unsigned long el = millis() - phaseChangedAt;
+    if (el < 2000) p = palette_lerp(oldPalette, target, phase_transition_t(el, 2000));
   }
-  ui->fillCircle(K(24), topY, K(4), wifiOk ? 0x07E0 : 0x4208);
+  drawBackground(p);
 
-  drawEyes(expr);
-  drawMouth(expr);
+  drawWeekArc(p);
+  drawSun(p);
 
-  // 今天要做的事：每个习惯一个 emoji 图标
-  if (habCount > 0) {
-    int usable = SCREEN_W - 2 * K(34);
-    int gap = (habCount > 1) ? (usable / habCount) : 0;
-    int startX = SCREEN_W / 2 - (habCount - 1) * gap / 2;
-    for (int i = 0; i < habCount; i++) {
-      drawHabitIcon(startX + i * gap, K(176), hab[i].id, hab[i].done, (i == selected));
-    }
-  } else {
-    ui->setTextColor(C_TXT);
-    ui->setTextSize(2);
-    ui->setCursor(K(46), K(172));
-    ui->print("SYNCING");
-  }
+  drawHabitArc(p);
 
-  // 计时进度条
+  // 计时进度条：放在太阳与习惯弧之间，不能压住贴纸
   if (runIdx >= 0 && runDur > 0) {
-    int w = K(160), x0 = SCREEN_W / 2 - w / 2, yb = K(205), hb = K(10);
-    ui->drawRect(x0, yb, w, hb, C_STAR_OFF);
+    Rect bar = progress_bar_rect(SCREEN_W, SCREEN_H);
+    ui->drawRect(bar.x, bar.y, bar.w, bar.h, p.weekFuture);
     unsigned long e = millis() - runStart;
-    int f = (int)((e >= runDur) ? w - 2 : (e * (unsigned long)(w - 2)) / runDur);
-    if (f > 0) ui->fillRect(x0 + 1, yb + 1, f, hb - 2, C_STAR_ON);
+    int f = (int)((e >= runDur) ? bar.w - 2
+                               : (e * (unsigned long)(bar.w - 2)) / runDur);
+    if (f > 0) ui->fillRect(bar.x + 1, bar.y + 1, f, bar.h - 2, p.weekDone);
   }
 
   if (banner.length()) {
     ui->setTextSize(1);
-    ui->setTextColor(C_ACCENT);
+    ui->setTextColor(p.accent);
     ui->setCursor(K(14), K(224));
     ui->print(banner);
   }
@@ -799,7 +915,6 @@ void loadState() {
   todayKey = prefs.getString("day", "");
   streak = prefs.getInt("streak", 0);
   queue = prefs.getString("queue", "");
-  volNight = prefs.getBool("night", false);
   int mask = prefs.getInt("done", 0);
   loadHabits();
   for (int i = 0; i < habCount; i++) hab[i].done = (mask >> i) & 1;
@@ -989,18 +1104,6 @@ bool syncState() {
     pos = nl + 1;
 
     if (line.startsWith("V="))          protoVer = line.substring(2).toInt();
-    else if (line.startsWith("VOL=")) {
-      String vs = line.substring(4);
-      vs.trim();
-      bool ok = vs.length() > 0;
-      for (unsigned int i = 0; i < vs.length(); i++) {
-        if (!isDigit(vs[i])) ok = false;
-      }
-      if (ok) {
-        int v = vs.toInt();
-        if (v >= 0 && v <= 100) { volPct = v; applyVolume(); }
-      }
-    }
     else if (line.startsWith("PACK=")) {
       packVer = line.substring(5);
       // 设备上记一份，将来 OTA 换语音包时据此判断要不要下载
@@ -1012,6 +1115,20 @@ bool syncState() {
       }
     }
     else if (line.startsWith("Q="))      cardN = line.substring(2).toInt();
+    else if (line.startsWith("WEEK_CAL=")) {
+      weekCalValid = (parse_bits7(line.substring(9).c_str(), weekCal) == 7);
+    }
+    else if (line.startsWith("WEEKDAY=")) {
+      int wd = line.substring(8).toInt();
+      if (wd >= 1 && wd <= 7) weekday = wd;
+    }
+    else if (line.startsWith("VOL=")) {
+      int v = 0;
+      if (parse_volume_pct(line.substring(4).c_str(), v)) {
+        volumePct = v;
+        applyVolume();
+      }
+    }
     else if (line.startsWith("WEEK="))  parseWeek(line.substring(5));
     else if (line.startsWith("STREAK=")) streak = line.substring(7).toInt();
     else if (line.startsWith("H="))      parseHabitLine(line);
@@ -1064,7 +1181,7 @@ void completeHabit(int idx) {
 
   if (hab[idx].done) {
     setBanner("ALREADY DONE");
-    say(VOICE_THANKS);
+    say(VOICE_ALREADY_DONE);
     return;
   }
   hab[idx].done = true;
@@ -1075,6 +1192,17 @@ void completeHabit(int idx) {
 
   // 本地先给反馈，再管网络（保证断网也不掉体验）
   playDoneChime();                       // 立刻"叮"：确认收到
+  {
+    // 星星从贴纸飞向今天的周点（约 1 秒）
+    int toX = SCREEN_W / 2, toY = S(30);
+    if (weekCalValid && weekday >= 1 && weekday <= 7) {
+      int wx[7], wy[7];
+      week_dot_positions(SCREEN_W / 2, SCREEN_H / 2, S(150), wx, wy);
+      toX = wx[weekday - 1];
+      toY = wy[weekday - 1];
+    }
+    animateStarFlight(habitX[idx], habitY[idx], toX, toY);
+  }
   happyFor(3000);
   int r = random(0, 100);
   if (r < EGG_CHANCE_PCT) {              // 低概率：小豆豆说一句自己的事
@@ -1162,6 +1290,7 @@ void tca9554Init() {
 #endif
 bool touchHeld = false, touchLongFired = false;
 unsigned long touchDownAt = 0;
+int touchLastX = 0, touchLastY = 0;
 
 void touchInit() {
 #if !TP_ON_SYS_BUS
@@ -1175,29 +1304,84 @@ void touchInit() {
   Serial.printf("[touch] CST816 %s\n", touchReady ? "OK" : "未找到");
 }
 
-int touchGesture() {
-  if (!touchReady) return 0;
-  TPWIRE.beginTransmission(CST816_ADDR);
-  TPWIRE.write(0x01);
-  TPWIRE.endTransmission(false);
-  TPWIRE.requestFrom((int)CST816_ADDR, 1);
-  return TPWIRE.available() ? TPWIRE.read() : 0;
+// CST816 标准寄存器：0x01 Gesture / 0x02 FingerNum / 0x03-0x06 X/Y
+#define CST816_REG_GESTURE 0x01
+#define CST816_REG_FINGERS 0x02
+#define CST816_REG_XH      0x03
+#define CST816_REG_XL      0x04
+#define CST816_REG_YH      0x05
+#define CST816_REG_YL      0x06
+
+// 真机方向不对时只改这三行：交换 XY / 镜像 X / 镜像 Y
+#define TP_SWAP_XY  0
+#define TP_MIRROR_X 0
+#define TP_MIRROR_Y 0
+
+int mapTouchX(int rawX, int rawY) {
+#if TP_SWAP_XY
+  int v = rawY;
+#else
+  int v = rawX;
+#endif
+  return touch_map_axis(v, SCREEN_W, TP_MIRROR_X);
 }
 
-// 轻点 / 长按 → 映射成和按键一样的事件（0 无 / 1 短 / 2 长）
-int readTouch() {
-  int g = touchGesture();
-  bool now = (g != 0);
-  if (now && !touchHeld) {
-    touchHeld = true;
-    touchDownAt = millis();
-    touchLongFired = false;
-  } else if (now && !touchLongFired && millis() - touchDownAt > 900) {
-    touchLongFired = true;
-    return 2;
-  } else if (!now && touchHeld) {
+int mapTouchY(int rawX, int rawY) {
+#if TP_SWAP_XY
+  int v = rawX;
+#else
+  int v = rawY;
+#endif
+  return touch_map_axis(v, SCREEN_H, TP_MIRROR_Y);
+}
+
+bool touchReadRaw(uint8_t buf[6]) {
+  if (!touchReady) return false;
+  TPWIRE.beginTransmission(CST816_ADDR);
+  TPWIRE.write(CST816_REG_GESTURE);
+  if (TPWIRE.endTransmission(false) != 0) return false;
+  if (TPWIRE.requestFrom((int)CST816_ADDR, 6) != 6) return false;
+  for (int i = 0; i < 6; i++) buf[i] = TPWIRE.read();
+  return true;
+}
+
+bool touchReadPoint(int &x, int &y) {
+  uint8_t b[6];
+  if (!touchReadRaw(b) || b[1] == 0) return false;
+  int rawX = ((b[2] & 0x0F) << 8) | b[3];
+  int rawY = ((b[4] & 0x0F) << 8) | b[5];
+  x = mapTouchX(rawX, rawY);
+  y = mapTouchY(rawX, rawY);
+  return true;
+}
+
+// 轻点 / 长按 → 0 无 / 1 轻点（带坐标）/ 2 长按（带坐标）
+int readTouchEvent(int &x, int &y) {
+  uint8_t b[6];
+  if (!touchReadRaw(b)) return 0;
+  bool now = (b[1] > 0);
+  if (now) {
+    int rawX = ((b[2] & 0x0F) << 8) | b[3];
+    int rawY = ((b[4] & 0x0F) << 8) | b[5];
+    touchLastX = mapTouchX(rawX, rawY);
+    touchLastY = mapTouchY(rawX, rawY);
+    if (!touchHeld) {
+      touchHeld = true;
+      touchDownAt = millis();
+      touchLongFired = false;
+    } else if (!touchLongFired && millis() - touchDownAt > 900) {
+      touchLongFired = true;
+      x = touchLastX; y = touchLastY;
+      Serial.printf("[touch] long %d,%d\n", x, y);
+      return 2;
+    }
+  } else if (touchHeld) {
     touchHeld = false;
-    if (!touchLongFired) return 1;
+    if (!touchLongFired) {
+      x = touchLastX; y = touchLastY;
+      Serial.printf("[touch] tap %d,%d\n", x, y);
+      return 1;
+    }
   }
   return 0;
 }
@@ -1265,6 +1449,29 @@ void handleSerial() {
     }
     else if (c == '1') { say(1); } else if (c == '2') { say(2); }
     else if (c == '3') { say(3); } else if (c == '8') { say(8); }
+    else if (c == 'T') {                    // 触摸原始数据（核对坐标轴/寄存器）
+#if USE_TOUCH
+      uint8_t b[6];
+      if (touchReadRaw(b)) {
+        Serial.printf("[touch] raw %02X %02X %02X %02X %02X %02X\n",
+                      b[0], b[1], b[2], b[3], b[4], b[5]);
+      } else {
+        Serial.println("[touch] no data");
+      }
+#else
+      Serial.println("[touch] not enabled");
+#endif
+    }
+    else if (c == 'p') {                    // 四幕自检：MORNING→DAY→EVENING→NIGHT
+      currentPhase = (Phase)(((int)currentPhase + 1) & 3);
+      phaseChangedAt = millis();
+      nightMode = (currentPhase == PHASE_NIGHT);
+      setBacklightPct(palette_for_phase(currentPhase).brightness);
+      applyVolume();
+      needRedraw = true;
+      Serial.printf("[phase] %s brightness=%d\n", phase_name(currentPhase),
+                    palette_for_phase(currentPhase).brightness);
+    }
     else if (c == 'd') {                    // 屏幕自检：红/绿/蓝/白/黑
       const uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000};
       const char *names[] = {"RED", "GREEN", "BLUE", "WHITE", "BLACK"};
@@ -1310,6 +1517,73 @@ void handleSerial() {
   }
 }
 
+// ======================= 背光 / 四幕 =======================
+// core 2.x 的 LEDC 按通道号；通道 1 给背光，通道 0 留给蜂鸣器（240 板）
+void backlightInit() {
+#if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
+  pinMode(LCD_BL, OUTPUT);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(LCD_BL, 5000, 8);
+#else
+  ledcSetup(1, 5000, 8);
+  ledcAttachPin(LCD_BL, 1);
+#endif
+#else
+  pinMode(TFT_BL, OUTPUT);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(TFT_BL, 5000, 8);
+#else
+  ledcSetup(1, 5000, 8);
+  ledcAttachPin(TFT_BL, 1);
+#endif
+#endif
+}
+
+void setBacklightPct(int pct) {
+  int duty = backlight_duty(pct);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  #if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
+  ledcWrite(LCD_BL, duty);
+  #else
+  ledcWrite(TFT_BL, duty);
+  #endif
+#else
+  ledcWrite(1, duty);
+#endif
+}
+
+// 进入新时段时做一次短动作：晨伸懒腰 / 暮眨眼 / 夜打哈欠
+void setPhaseExpression(Phase p) {
+  if (p == PHASE_MORNING) {
+    happyFor(1500);
+  } else if (p == PHASE_EVENING) {
+    expr = EXPR_WINK;
+    exprUntil = millis() + 1500;
+    needRedraw = true;
+  } else if (p == PHASE_NIGHT) {
+    expr = EXPR_SLEEPY;
+    exprUntil = millis() + 1500;
+    needRedraw = true;
+  }
+}
+
+void updatePhase(bool force) {
+  struct tm t;
+  if (!getLocalTime(&t, 10)) return;     // 没时间：保持当前时段（冷启动=夜间）
+  Phase p = phase_for_time(t.tm_hour, t.tm_min);
+  if (!force && p == currentPhase) return;
+  if (p != currentPhase) {
+    oldPalette = palette_for_phase(currentPhase);
+    phaseChangedAt = millis();
+    setPhaseExpression(p);
+  }
+  currentPhase = p;
+  nightMode = (p == PHASE_NIGHT);
+  setBacklightPct(palette_for_phase(p).brightness);
+  applyVolume();                         // 夜间音量压到 60%
+  needRedraw = true;
+}
+
 // ======================= setup / loop =======================
 void setup() {
   Serial.begin(115200);
@@ -1326,12 +1600,9 @@ void setup() {
 
 #if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
   tca9554Init();                 // 必须先放 LCD_RST / TP_RST，否则屏不亮
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);
-#else
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
 #endif
+  backlightInit();
+  setBacklightPct(20);           // 冷启动先夜间亮度；NTP 成功后 updatePhase() 切时段
 
   bool gfxOk = gfx->begin(40000000);   // 先降到 40 MHz，排除 QSPI 时序/信号问题
   Serial.printf("[ui] gfx %s\n", gfxOk ? "OK" : "FAIL");
@@ -1356,7 +1627,7 @@ void setup() {
   delay(1200);                       // DFPlayer 上电需要时间
   mp3Ok = mp3.begin(Serial1);
   if (mp3Ok) {
-    volApplied = -1;
+    mp3.volume(22);
     applyVolume();
     mp3.EQ(DFPLAYER_EQ_NORMAL);
     Serial.println("[mp3] DFPlayer OK");
@@ -1367,6 +1638,7 @@ void setup() {
 
   connectWifi();
   if (wifiOk) { syncState(); flushQueue(); }
+  updatePhase(true);
 
   say(VOICE_BOOT);
   happyFor(2500);
@@ -1377,10 +1649,6 @@ void loop() {
   // 1. 跨天检查
   static unsigned long lastDayCheck = 0;
   if (millis() - lastDayCheck > 5000) { lastDayCheck = millis(); rollDayIfNeeded(); }
-
-  // 音量昼夜切换/断网重算：不依赖服务器是否在线
-  static unsigned long lastVolCheck = 0;
-  if (millis() - lastVolCheck > 30000) { lastVolCheck = millis(); applyVolume(); }
 
   // 2b. 输入：按键（DevKitC）或触摸（1.85）
   int a = readBtn(btnA);
@@ -1405,17 +1673,50 @@ void loop() {
 
 #if USE_TOUCH
   {
-    int t = readTouch();
-    if (t == 2) {                       // 长按
-      if (cardMode) a = 2; else b = 2;
-    } else if (t == 1) {                // 轻点
-      if (cardMode) b = 1; else a = 1;  // 卡片里轻点翻页；主界面轻点=完成
+    int tx = 0, ty = 0;
+    int t = readTouchEvent(tx, ty);
+    if (cardMode) {
+      if (t == 2) a = 2;                // 长按退出卡片
+      else if (t == 1) b = 1;           // 轻点翻页
+    } else if (t == 1) {
+      int i = hitHabit(tx, ty);
+      if (i >= 0) {
+        selected = i;
+        animateStickerBounce(i);
+        if (hab[i].minSec > 0 && !hab[i].done) {
+          runIdx = i;
+          runStart = millis();
+          runDur = (unsigned long)hab[i].minSec * 1000UL;
+          lastBarMs = 0;
+          say(17);
+          talkFor(2500);
+          needRedraw = true;
+        } else {
+          completeHabit(i);
+        }
+      } else if (hitSun(tx, ty)) {
+        if (habCount > 0 && allDone()) {
+          say(VOICE_TELL_PARENTS);
+          postPath("/api/child_note");
+          talkFor(4000);
+          setBanner("TELL PARENTS", 4000);
+        } else {
+          say(VOICE_Q_SAVED);
+          postPath("/api/question_quick");
+          talkFor(4000);
+          setBanner("QUESTION SAVED", 4000);
+        }
+      }
+    } else if (t == 2) {                // 长按主界面：立即同步
+      syncState();
+      flushQueue();
+      setBanner("SYNCED", 2000);
     }
   }
 #endif
 
   if (cardMode) {
-    if (a == 1) {                       // A：退出卡片
+    if (a == 1 || a == 2) {             // A / 长按：退出卡片
       cardMode = false; cardPending = false;
       needRedraw = true;
     } else if (b == 1) {                // B：翻页
@@ -1480,6 +1781,20 @@ void loop() {
     syncState();
     flushQueue();
     needRedraw = true;
+  }
+
+  // 3b. 四幕时段（每 30 秒；无时间时保持当前时段）
+  if (millis() - lastPhaseCheck > 30000) {
+    lastPhaseCheck = millis();
+    updatePhase(false);
+  }
+  // 时段切换后 2 秒内平滑过渡
+  if (phaseChangedAt && millis() - phaseChangedAt < 2000) {
+    static unsigned long lastPhaseRedraw = 0;
+    if (millis() - lastPhaseRedraw > 100) {
+      lastPhaseRedraw = millis();
+      needRedraw = true;
+    }
   }
 
   // 4. 提醒
