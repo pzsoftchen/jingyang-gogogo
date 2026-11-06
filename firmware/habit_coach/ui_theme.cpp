@@ -211,6 +211,11 @@ uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t) {
   return (uint16_t)((r << 11) | (g << 5) | bl);
 }
 
+uint8_t phase_transition_t(unsigned long elapsedMs, unsigned long durationMs) {
+  if (durationMs == 0 || elapsedMs >= durationMs) return 255;
+  return (uint8_t)(elapsedMs * 255UL / durationMs);
+}
+
 Palette palette_lerp(const Palette &a, const Palette &b, uint8_t t) {
   Palette out;
   out.bgTop = lerp565(a.bgTop, b.bgTop, t);

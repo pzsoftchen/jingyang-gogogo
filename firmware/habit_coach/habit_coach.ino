@@ -262,8 +262,10 @@ int  weekday = 0;             // 1=周一 … 7=周日；0=未知
 int  volumePct = -1;          // 家长页音量 0-100；-1=服务器未下发
 bool nightMode = false;       // 由时段引擎更新
 Phase currentPhase = PHASE_NIGHT;   // 冷启动先按夜间，NTP 成功后再切
+Palette oldPalette;
 unsigned long phaseChangedAt = 0;
 unsigned long lastPhaseCheck = 0;
+int bounceIdx = -1, bounceDy = 0;   // 贴纸轻弹动画
 int  streak = 0;
 int  protoVer = 1;        // 服务器协议版本（V=2）
 String packVer = "";      // 服务器上的语音包版本（PACK=voice.1）
@@ -514,7 +516,8 @@ void drawWeekArc(const Palette &p) {
   ui->fillCircle(S(18), S(18), S(4), wifiOk ? 0x07E0 : 0x4208);
 }
 
-void drawStar(int cx, int cy, int r, bool filled, bool sel) {
+void drawStar(int cx, int cy, int r, bool filled, bool sel,
+              uint16_t onColor, uint16_t offColor) {
   int px[10], py[10];
   for (int i = 0; i < 10; i++) {
     float a = -PI / 2 + i * PI / 5.0f;
@@ -524,10 +527,10 @@ void drawStar(int cx, int cy, int r, bool filled, bool sel) {
   }
   for (int i = 0; i < 10; i++) {
     int j = (i + 1) % 10;
-    ui->drawLine(px[i], py[i], px[j], py[j], filled ? C_STAR_ON : C_STAR_OFF);
+    ui->drawLine(px[i], py[i], px[j], py[j], filled ? onColor : offColor);
   }
-  if (filled) for (int i = 0; i < 10; i++) ui->drawLine(cx, cy, px[i], py[i], C_STAR_ON);
-  if (sel) ui->drawCircle(cx, cy, r + K(7), C_ACCENT);
+  if (filled) for (int i = 0; i < 10; i++) ui->drawLine(cx, cy, px[i], py[i], onColor);
+  if (sel) ui->drawCircle(cx, cy, r + K(7), onColor);
 }
 
 void renderCard();   // 前置声明
@@ -543,7 +546,8 @@ int iconIndexOf(const String &id) {
 // 奶油贴纸：图标 + 已完成右上角小星星（不再画大双圈）
 void drawHabitIcon(int i, const Palette &p) {
   if (i < 0 || i >= habCount) return;
-  int cx = habitX[i], cy = habitY[i], r = habitStickerR;
+  int cx = habitX[i], cy = habitY[i] + ((i == bounceIdx) ? bounceDy : 0);
+  int r = habitStickerR;
   ui->fillCircle(cx, cy, r, p.sticker);
   ui->drawCircle(cx, cy, r, p.stickerEdge);
   ui->drawCircle(cx, cy, r - 1, p.stickerEdge);
@@ -569,7 +573,7 @@ void drawHabitIcon(int i, const Palette &p) {
       }
     }
   } else {
-    drawStar(cx, cy, S(16), hab[i].done, false);
+    drawStar(cx, cy, S(16), hab[i].done, false, p.accent, p.weekFuture);
   }
 
   if (hab[i].done) {
@@ -585,7 +589,33 @@ void drawHabitIcon(int i, const Palette &p) {
 #endif
 }
 
-void animateStickerBounce(int idx) { (void)idx; }   // Task 8 实现
+void animateStickerBounce(int idx) {
+  if (idx < 0 || idx >= habCount) return;
+  const int offs[4] = {0, -S(3), -S(1), 0};
+  bounceIdx = idx;
+  for (int f = 0; f < 4; f++) {
+    bounceDy = offs[f];
+    render();
+    delay(40);
+  }
+  bounceIdx = -1;
+  bounceDy = 0;
+  needRedraw = true;
+}
+
+void animateStarFlight(int fromX, int fromY, int toX, int toY) {
+  Palette p = palette_for_phase(currentPhase);
+  for (int f = 0; f < 30; f++) {
+    float t = f / 29.0f;
+    int x = fromX + (int)((toX - fromX) * t);
+    int y = fromY + (int)((toY - fromY) * t) - (int)(sinf(t * PI) * S(20));
+    render();
+    drawStar(x, y, S(8), true, false, p.accent, p.weekFuture);
+    if (canvasOk) canvas->flush();
+    delay(20);
+  }
+  needRedraw = true;
+}
 
 void drawHabitArc(const Palette &p) {
   habitStickerR = habit_sticker_radius(SCREEN_W);
@@ -628,10 +658,11 @@ void drawHeart(int cx, int cy, int r, uint16_t col) {
 
 void playCelebration(int kind) {
   // kind: 0 星星雨 1 爱心雨 2 emoji 图标雨 3 彩纸
+  Palette cp = palette_for_phase(currentPhase);
   const int N = 16;
   int px[N], py[N], spd[N], rot[N];
   uint16_t col[N];
-  const uint16_t palette[5] = {C_STAR_ON, 0xFE60, 0xFD20, 0x07FF, 0xF81F};
+  const uint16_t palette[5] = {cp.weekDone, cp.sun, cp.accent, 0x07FF, 0xF81F};
   int w = SCREEN_W, h = SCREEN_H;
   for (int i = 0; i < N; i++) {
     px[i] = random(K(16), w - K(16));
@@ -645,7 +676,6 @@ void playCelebration(int kind) {
 
   int savedExpr = expr;
   expr = EXPR_HAPPY;
-  Palette cp = palette_for_phase(currentPhase);
   for (int f = 0; f < 42; f++) {
     drawBackground(cp);
     drawSun(cp);
@@ -654,7 +684,7 @@ void playCelebration(int kind) {
       int x = px[i] + (int)(sin((f + i * 7) / 6.0f) * K(6));
       if (y < 0 || y > h) continue;
       if (kind == 0) {
-        drawStar(x, y, K(9), true, false);
+        drawStar(x, y, K(9), true, false, cp.accent, cp.weekFuture);
       } else if (kind == 1) {
         drawHeart(x, y, K(9), col[i]);
       } else if (kind == 2) {
@@ -678,7 +708,12 @@ void playCelebration(int kind) {
 
 void render() {
   if (cardMode) { renderCard(); return; }
-  Palette p = palette_for_phase(currentPhase);
+  Palette target = palette_for_phase(currentPhase);
+  Palette p = target;
+  if (phaseChangedAt) {
+    unsigned long el = millis() - phaseChangedAt;
+    if (el < 2000) p = palette_lerp(oldPalette, target, phase_transition_t(el, 2000));
+  }
   drawBackground(p);
 
   drawWeekArc(p);
@@ -1135,6 +1170,17 @@ void completeHabit(int idx) {
 
   // 本地先给反馈，再管网络（保证断网也不掉体验）
   playDoneChime();                       // 立刻"叮"：确认收到
+  {
+    // 星星从贴纸飞向今天的周点（约 1 秒）
+    int toX = SCREEN_W / 2, toY = S(30);
+    if (weekCalValid && weekday >= 1 && weekday <= 7) {
+      int wx[7], wy[7];
+      week_dot_positions(SCREEN_W / 2, SCREEN_H / 2, S(150), wx, wy);
+      toX = wx[weekday - 1];
+      toY = wy[weekday - 1];
+    }
+    animateStarFlight(habitX[idx], habitY[idx], toX, toY);
+  }
   happyFor(3000);
   int r = random(0, 100);
   if (r < EGG_CHANCE_PCT) {              // 低概率：小豆豆说一句自己的事
@@ -1484,12 +1530,31 @@ void setBacklightPct(int pct) {
 #endif
 }
 
+// 进入新时段时做一次短动作：晨伸懒腰 / 暮眨眼 / 夜打哈欠
+void setPhaseExpression(Phase p) {
+  if (p == PHASE_MORNING) {
+    happyFor(1500);
+  } else if (p == PHASE_EVENING) {
+    expr = EXPR_WINK;
+    exprUntil = millis() + 1500;
+    needRedraw = true;
+  } else if (p == PHASE_NIGHT) {
+    expr = EXPR_SLEEPY;
+    exprUntil = millis() + 1500;
+    needRedraw = true;
+  }
+}
+
 void updatePhase(bool force) {
   struct tm t;
   if (!getLocalTime(&t, 10)) return;     // 没时间：保持当前时段（冷启动=夜间）
   Phase p = phase_for_time(t.tm_hour, t.tm_min);
   if (!force && p == currentPhase) return;
-  if (p != currentPhase) phaseChangedAt = millis();
+  if (p != currentPhase) {
+    oldPalette = palette_for_phase(currentPhase);
+    phaseChangedAt = millis();
+    setPhaseExpression(p);
+  }
   currentPhase = p;
   nightMode = (p == PHASE_NIGHT);
   setBacklightPct(palette_for_phase(p).brightness);
@@ -1700,6 +1765,14 @@ void loop() {
   if (millis() - lastPhaseCheck > 30000) {
     lastPhaseCheck = millis();
     updatePhase(false);
+  }
+  // 时段切换后 2 秒内平滑过渡
+  if (phaseChangedAt && millis() - phaseChangedAt < 2000) {
+    static unsigned long lastPhaseRedraw = 0;
+    if (millis() - lastPhaseRedraw > 100) {
+      lastPhaseRedraw = millis();
+      needRedraw = true;
+    }
   }
 
   // 4. 提醒

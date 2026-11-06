@@ -200,6 +200,13 @@ int main() {
   CHECK(m.cy - m.rayR >= 0 && m.cy + m.bodyR < 240);
   CHECK(m.bodyR < g.bodyR);
 
+  // 过渡进度：0 / 中点 / 结束 / 超时 / 零时长
+  CHECK_EQ(phase_transition_t(0, 2000), 0);
+  CHECK_EQ(phase_transition_t(1000, 2000), 127);
+  CHECK_EQ(phase_transition_t(2000, 2000), 255);
+  CHECK_EQ(phase_transition_t(3000, 2000), 255);
+  CHECK_EQ(phase_transition_t(100, 0), 255);
+
   // 颜色插值与调色板插值端点
   CHECK_EQ(lerp565(0x1234, 0xABCD, 0), 0x1234);
   CHECK_EQ(lerp565(0x1234, 0xABCD, 255), 0xABCD);
@@ -211,6 +218,13 @@ int main() {
                         palette_for_phase(PHASE_NIGHT), 255)
                .bgTop,
            palette_for_phase(PHASE_NIGHT).bgTop);
+  CHECK(palette_lerp(palette_for_phase(PHASE_DAY),
+                     palette_for_phase(PHASE_NIGHT), 128)
+            .bgTop != palette_for_phase(PHASE_DAY).bgTop);
+  CHECK(palette_lerp(palette_for_phase(PHASE_DAY),
+                     palette_for_phase(PHASE_NIGHT), 128)
+            .bgTop != palette_for_phase(PHASE_NIGHT).bgTop);
+  CHECK_EQ(lerp565(0x1234, 0x1234, 128), 0x1234);
 
   // 今天状态：无新字段时调用方走旧 WEEK 回退；有新字段时识别今天/今天完成
   bool cal[7] = {true, false, true, true, false, false, false};

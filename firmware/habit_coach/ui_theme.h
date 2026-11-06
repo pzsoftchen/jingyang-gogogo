@@ -53,3 +53,4 @@ int touch_map_axis(int raw, int screenSize, bool mirror);
 void sun_ray_endpoints(Phase p, int cx, int cy, int bodyR, int rayR, int outX[8], int outY[8]);
 uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t);
 Palette palette_lerp(const Palette &a, const Palette &b, uint8_t t);
+uint8_t phase_transition_t(unsigned long elapsedMs, unsigned long durationMs);
