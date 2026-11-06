@@ -1297,6 +1297,20 @@ def album_data(conn):
     }
 
 
+THEME_JS = """<script>
+(function(){
+  try{var s=localStorage.getItem('coach-theme');
+    if(s==='day'||s==='night'){document.body.classList.remove('day','night');document.body.classList.add(s);}
+  }catch(e){}
+  var b=document.getElementById('themeToggle');
+  if(b){b.addEventListener('click',function(){
+    var n=document.body.classList.contains('day')?'night':'day';
+    document.body.classList.remove('day','night');document.body.classList.add(n);
+    try{localStorage.setItem('coach-theme',n);}catch(e){}
+  });}
+})();
+</script>"""
+
 QUICK_HTML = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>记一个问题</title><style>
@@ -1306,17 +1320,25 @@ body{margin:0;background:#111418;color:#e8edf3;font:16px/1.6 -apple-system,"Ping
 h1{font-size:20px;margin:4px 0 6px}
 .sub{color:#8b97a6;font-size:13px}
 form{margin-top:16px}
-input{width:100%%;font-size:20px;padding:16px;border-radius:14px;border:1px solid #2a313a;
+input{width:100%;font-size:20px;padding:16px;border-radius:14px;border:1px solid #2a313a;
       background:#12171d;color:#e8edf3}
 input:focus{outline:2px solid #ff6b9d}
-button{width:100%%;margin-top:12px;padding:16px;font-size:18px;font-weight:700;
+button{width:100%;margin-top:12px;padding:16px;font-size:18px;font-weight:700;
        border:0;border-radius:14px;background:#ff6b9d;color:#2a0616}
 .hint{color:#8b97a6;font-size:13px;margin-top:10px;line-height:1.7}
 h2{font-size:14px;color:#8b97a6;margin:28px 0 8px;font-weight:normal}
 .item{background:#12171d;border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
 .item span{color:#8b97a6;font-size:12px;display:block}
 a{color:#ff6b9d}
-</style></head><body><div class="w">
+body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#8B735E;--accent:#E76F51;--accent-ink:#FFF8EC}
+body.night{--bg:#1B2340;--card:#242E4F;--line:#3A466F;--fg:#FFF4D6;--dim:#9EA9C8;--accent:#FF8A65;--accent-ink:#2A1A14}
+body{background:var(--bg);color:var(--fg)}
+.sub,.hint,h2,.item span{color:var(--dim)}
+input{background:var(--card);color:var(--fg);border-color:var(--line)}
+button{background:var(--accent);color:var(--accent-ink)}
+.item{background:var(--card)}
+a{color:var(--accent)}
+</style></head><body class="{{THEME}}"><div class="w">
 <h1>记一个问题</h1>
 <div class="sub">他说了什么？记下来，回家一起找答案。</div>
 <form method="post" action="/quick">
@@ -1334,13 +1356,14 @@ a{color:#ff6b9d}
   {{PENDING}}<br>
   <a href="/">← 回家长页</a>
 </div>
-</div></body></html>"""
+</div>{{THEME_JS}}</body></html>"""
 
 
 ALBUM_CSS = """
-:root{--ink:#111;--dim:#777;--line:#ddd;--gold:#b8860b}
+body.day{--ink:#3E3228;--dim:#8B735E;--line:#EADAC6;--gold:#E76F51;--bg:#FFF8EC;--card:#FFFDF7}
+body.night{--ink:#FFF4D6;--dim:#9EA9C8;--line:#3A466F;--gold:#FFE8A3;--bg:#1B2340;--card:#242E4F}
 *{box-sizing:border-box}
-body{margin:0;background:#f7f5f0;color:var(--ink);
+body{margin:0;background:var(--bg);color:var(--ink);
      font:16px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
 .wrap{max-width:720px;margin:0 auto;padding:28px 20px 60px}
 h1{font-size:26px;margin:0 0 4px;letter-spacing:1px}
@@ -1351,17 +1374,17 @@ h1{font-size:26px;margin:0 0 4px;letter-spacing:1px}
 .stat span{font-size:12px;color:var(--dim)}
 h2{font-size:17px;margin:34px 0 14px;padding-left:10px;border-left:4px solid var(--gold)}
 .wall{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
-.cell{aspect-ratio:1;border:1px solid var(--line);border-radius:10px;background:#fff;
+.cell{aspect-ratio:1;border:1px solid var(--line);border-radius:10px;background:var(--card);
       display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative}
-.cell.on{border-color:var(--gold);background:#fffdf6}
+.cell.on{border-color:var(--gold);background:var(--card)}
 .cell b{font-size:30px;line-height:1;color:var(--gold)}
 .cell i{font-style:normal;font-size:10px;color:var(--dim);margin-top:4px}
-.cell.off b{color:#ddd}
-.cell.off i{color:#ddd}
+.cell.off b{color:var(--line)}
+.cell.off i{color:var(--line)}
 .cell .rk{position:absolute;top:4px;right:6px;font-size:9px;color:var(--gold)}
 .q{border-left:3px solid var(--line);padding:2px 0 2px 14px;margin-bottom:22px}
 .q .qt{font-size:16px;font-weight:600;margin-bottom:6px}
-.q .qa{white-space:pre-wrap;font-size:14px;color:#333;background:#fff;border-radius:8px;padding:10px 12px}
+.q .qa{white-space:pre-wrap;font-size:14px;color:var(--ink);background:var(--card);border-radius:8px;padding:10px 12px}
 .q .qw{font-size:13px;color:var(--dim)}
 .q .qm{font-size:11px;color:var(--dim);margin-top:4px}
 table.firsts{width:100%;border-collapse:collapse;font-size:14px}
@@ -1370,10 +1393,10 @@ table.firsts td:first-child{color:var(--dim);width:130px}
 .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);
       color:var(--dim);font-size:12px;text-align:center}
 .nav{position:fixed;right:16px;bottom:16px;display:flex;gap:10px}
-.nav a,.nav button{background:#111;color:#fff;border:0;border-radius:999px;
+.nav a,.nav button{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:999px;
       padding:11px 16px;font-size:14px;text-decoration:none;cursor:pointer}
 @media print{
-  body{background:#fff}
+  body{background:#fff;--ink:#3E3228;--dim:#8B735E;--line:#EADAC6;--gold:#E76F51;--bg:#fff;--card:#fff}
   .nav{display:none}
   .wrap{padding:0;max-width:none}
   h2{page-break-after:avoid}
@@ -1411,7 +1434,7 @@ def render_album(conn):
 
     return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%(child)s 的成长档案</title><style>%(css)s</style></head><body>
+<title>%(child)s 的成长档案</title><style>%(css)s</style></head><body class="%(theme)s">
 <div class="wrap">
   <div class="head">
     <h1>%(child)s 的成长档案</h1>
@@ -1438,7 +1461,8 @@ def render_album(conn):
     它记录的不是成绩，是这一年他问过什么、做到了什么。
   </div>
 </div>
-<div class="nav"><a href="/">回主页</a><button onclick="window.print()">打印</button></div>
+<div class="nav"><a href="/">回主页</a><button id="themeToggle" type="button">白天/夜晚</button><button onclick="window.print()">打印</button></div>
+%(theme_js)s
 </body></html>""" % {
         "child": d["child"], "coach": d["coach"], "start": d["start"],
         "days": d["days"], "learned": d["learned_n"], "total": d["total_chars"],
@@ -1446,6 +1470,7 @@ def render_album(conn):
         "checkins": d["checkins"], "best": d["best"],
         "css": ALBUM_CSS, "firsts": firsts_html,
         "wall": "".join(wall_html), "questions": q_block,
+        "theme": theme_now(), "theme_js": THEME_JS,
     }
 
 
@@ -1803,6 +1828,7 @@ PAGE = """<!doctype html>
     </div>
 
     <div class="sub" style="margin:22px 0 8px">设备 · 音量</div>
+    <div class="qbtns" style="margin-bottom:10px"><button type="button" id="themeToggle" class="mini">切换白天/夜晚</button></div>
     <form method="post" action="/parent/volume">
       <div class="sub" style="margin:0 0 8px">音量 {{VOLUME}}%</div>
       <input type="range" name="volume" min="0" max="100" value="{{VOLUME}}" style="width:100%">
@@ -1837,6 +1863,7 @@ PAGE = """<!doctype html>
     });
   });
 </script>
+{{THEME_JS}}
 </body></html>
 """
 
@@ -2125,6 +2152,7 @@ def render_page(conn, sent=""):
         "{{HABITTOGGLES}}": habit_toggles(conn),
         "{{TODAYRECORDS}}": today_records_html(conn),
         "{{VOLUME}}": str(get_volume(conn)),
+        "{{THEME_JS}}": THEME_JS,
         "{{ACTIVECOUNT}}": str(s["total"]),
         "{{MAXH}}": str(max_habits(conn)),
         "{{STAGENAME}}": cfg["name"],
@@ -2239,7 +2267,8 @@ class Handler(BaseHTTPRequestHandler):
                 n_pending = len(pending_questions_to_fill(conn))
                 pend = ("设备上记了 %d 个还没补内容 → <a href='/#q'>去补</a>" % n_pending) if n_pending else ""
                 return self._send(200,
-                    QUICK_HTML.replace("{{RECENT}}", recent).replace("{{PENDING}}", pend),
+                    QUICK_HTML.replace("{{RECENT}}", recent).replace("{{PENDING}}", pend)
+                    .replace("{{THEME}}", theme_now()).replace("{{THEME_JS}}", THEME_JS),
                     "text/html; charset=utf-8")
 
             if path == "/album":

@@ -792,3 +792,17 @@ class FirmwareVolumeTests(unittest.TestCase):
         self.assertIn("audio.setVolume", src)
         self.assertIn("mp3.volume", src)
 
+
+class QuickAlbumThemeTests(HttpBase, Base):
+    def test_quick_has_theme_and_toggle(self):
+        code, body = self.get("/quick")
+        html = body.decode("utf-8")
+        self.assertIn('class="%s"' % server.theme_now(), html)
+        self.assertIn("coach-theme", html)
+
+    def test_album_has_theme_and_print_light(self):
+        code, body = self.get("/album")
+        html = body.decode("utf-8")
+        self.assertIn('class="%s"' % server.theme_now(), html)
+        self.assertIn("@media print", html)
+
