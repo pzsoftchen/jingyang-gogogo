@@ -32,6 +32,7 @@
 #include "st77916_185c_init.h" // 1.85C 专用 ST77916 厂商初始化表
 #include "ui_theme.h"         // 四幕时段/调色板/弧线/音量纯函数
 #include <esp_heap_caps.h>
+#include <pgmspace.h>
 #if __has_include(<esp_arduino_version.h>)
 #include <esp_arduino_version.h>
 #endif
@@ -183,6 +184,9 @@ Habit hab[MAX_HABITS];
 int   habCount = 0;
 bool  remindedToday[MAX_HABITS] = {false, false, false, false};
 int   selected = 0;
+int   habitX[4] = {0, 0, 0, 0};   // 底部习惯贴纸中心（命中测试用）
+int   habitY[4] = {0, 0, 0, 0};
+int   habitStickerR = 30;
 
 // 问题卡模式：设备不解析中文，只把服务器画好的 240x240 RGB565 贴到屏上
 bool  cardMode = false;
@@ -536,29 +540,75 @@ int iconIndexOf(const String &id) {
   return -1;
 }
 
-void drawHabitIcon(int cx, int cy, const String &id, bool done, bool sel) {
-  int rBg = K(24);
-  ui->fillCircle(cx, cy, rBg, 0x10A2);
+// 奶油贴纸：图标 + 已完成右上角小星星（不再画大双圈）
+void drawHabitIcon(int i, const Palette &p) {
+  if (i < 0 || i >= habCount) return;
+  int cx = habitX[i], cy = habitY[i], r = habitStickerR;
+  ui->fillCircle(cx, cy, r, p.sticker);
+  ui->drawCircle(cx, cy, r, p.stickerEdge);
+  ui->drawCircle(cx, cy, r - 1, p.stickerEdge);
 
-  int idx = iconIndexOf(id);
+  int idx = iconIndexOf(hab[i].id);
+  int size = r * 2 - S(8);
+  if (size < 1) size = 1;
   if (idx >= 0) {
-    ui->draw16bitRGBBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2,
-                           (const uint16_t *)HABIT_ICON_PIX[idx], HABIT_ICON_W, HABIT_ICON_H);
+    if (size >= HABIT_ICON_W) {
+      ui->draw16bitRGBBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2,
+                             (const uint16_t *)HABIT_ICON_PIX[idx],
+                             HABIT_ICON_W, HABIT_ICON_H);
+    } else {
+      // 最近邻缩放：240 板上把 40x40 图标缩进更小的贴纸
+      const uint8_t *src = (const uint8_t *)HABIT_ICON_PIX[idx];
+      for (int y = 0; y < size; y++) {
+        int sy = y * HABIT_ICON_H / size;
+        for (int x = 0; x < size; x++) {
+          int sx = x * HABIT_ICON_W / size;
+          uint16_t c = pgm_read_word(src + (sy * HABIT_ICON_W + sx) * 2);
+          ui->drawPixel(cx - size / 2 + x, cy - size / 2 + y, c);
+        }
+      }
+    }
   } else {
-    drawStar(cx, cy, K(16), done, false);
+    drawStar(cx, cy, S(16), hab[i].done, false);
   }
 
-  if (done) {
-    ui->drawCircle(cx, cy, rBg, C_STAR_ON);
-    ui->drawCircle(cx, cy, rBg - 1, C_STAR_ON);
-    ui->fillCircle(cx + K(17), cy + K(17), K(8), C_STAR_ON);
-    ui->drawLine(cx + K(13), cy + K(17), cx + K(16), cy + K(21), C_INK);
-    ui->drawLine(cx + K(16), cy + K(21), cx + K(21), cy + K(13), C_INK);
-  } else {
-    ui->drawCircle(cx, cy, rBg, C_STAR_OFF);
+  if (hab[i].done) {
+    int bx = cx + r - S(8), by = cy - r + S(8);
+    ui->fillCircle(bx, by, S(7), p.accent);
+    int u = (S(3) > 0) ? S(3) : 2;
+    ui->drawLine(bx - u, by, bx, by + u, p.bgTop);
+    ui->drawLine(bx, by + u, bx + 2 * u, by - u, p.bgTop);
   }
 
-  if (sel) ui->drawCircle(cx, cy, rBg + K(5), C_ACCENT);
+#if HAS_BUTTONS
+  if (i == selected) ui->drawCircle(cx, cy, r + S(4), p.weekToday);
+#endif
+}
+
+void animateStickerBounce(int idx) { (void)idx; }   // Task 8 实现
+
+void drawHabitArc(const Palette &p) {
+  habitStickerR = habit_sticker_radius(SCREEN_W);
+  habit_arc_positions(habCount, SCREEN_W / 2, SCREEN_H * 17 / 36, S(140),
+                      habitX, habitY);
+  if (habCount == 0) {
+    ui->setTextColor(p.text);
+    ui->setTextSize(2);
+    ui->setCursor(K(46), K(172));
+    ui->print("SYNCING");
+    return;
+  }
+  for (int i = 0; i < habCount; i++) drawHabitIcon(i, p);
+}
+
+int hitHabit(int x, int y) {
+  return habit_hit_test(x, y, habitX, habitY, habCount,
+                        habitStickerR + S(8));
+}
+
+bool hitSun(int x, int y) {
+  SunGeom g = sun_geometry(SCREEN_W, SCREEN_H);
+  return circle_hit(x, y, g.cx, g.cy, S(60));
 }
 
 // ---------- 庆祝动画：4 种图案轮换 ----------
@@ -634,20 +684,7 @@ void render() {
   drawWeekArc(p);
   drawSun(p);
 
-  // 今天要做的事：每个习惯一个 emoji 图标（Task 7 换成下弧）
-  if (habCount > 0) {
-    int usable = SCREEN_W - 2 * K(34);
-    int gap = (habCount > 1) ? (usable / habCount) : 0;
-    int startX = SCREEN_W / 2 - (habCount - 1) * gap / 2;
-    for (int i = 0; i < habCount; i++) {
-      drawHabitIcon(startX + i * gap, K(176), hab[i].id, hab[i].done, (i == selected));
-    }
-  } else {
-    ui->setTextColor(p.text);
-    ui->setTextSize(2);
-    ui->setCursor(K(46), K(172));
-    ui->print("SYNCING");
-  }
+  drawHabitArc(p);
 
   // 计时进度条
   if (runIdx >= 0 && runDur > 0) {
@@ -1551,11 +1588,42 @@ void loop() {
   {
     int tx = 0, ty = 0;
     int t = readTouchEvent(tx, ty);
-    (void)tx; (void)ty;                 // Task 7 用坐标做贴纸/太阳命中测试
-    if (t == 2) {                       // 长按
-      if (cardMode) a = 2; else b = 2;
-    } else if (t == 1) {                // 轻点
-      if (cardMode) b = 1; else a = 1;  // 卡片里轻点翻页；主界面轻点=完成
+    if (cardMode) {
+      if (t == 2) a = 2;                // 长按退出卡片
+      else if (t == 1) b = 1;           // 轻点翻页
+    } else if (t == 1) {
+      int i = hitHabit(tx, ty);
+      if (i >= 0) {
+        selected = i;
+        animateStickerBounce(i);
+        if (hab[i].minSec > 0 && !hab[i].done) {
+          runIdx = i;
+          runStart = millis();
+          runDur = (unsigned long)hab[i].minSec * 1000UL;
+          lastBarMs = 0;
+          say(17);
+          talkFor(2500);
+          needRedraw = true;
+        } else {
+          completeHabit(i);
+        }
+      } else if (hitSun(tx, ty)) {
+        if (habCount > 0 && allDone()) {
+          say(VOICE_TELL_PARENTS);
+          postPath("/api/child_note");
+          talkFor(4000);
+          setBanner("TELL PARENTS", 4000);
+        } else {
+          say(VOICE_Q_SAVED);
+          postPath("/api/question_quick");
+          talkFor(4000);
+          setBanner("QUESTION SAVED", 4000);
+        }
+      }
+    } else if (t == 2) {                // 长按主界面：立即同步
+      syncState();
+      flushQueue();
+      setBanner("SYNCED", 2000);
     }
   }
 #endif

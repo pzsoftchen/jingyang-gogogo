@@ -127,6 +127,20 @@ int main() {
   CHECK_NEAR(hx[0] + hx[1], 360, 1);
   habit_arc_positions(4, 180, 180, 140, hx, hy);
   CHECK(hx[0] < hx[1] && hx[1] < hx[2] && hx[2] < hx[3]);
+  for (int i = 0; i < 4; i++)
+    CHECK_EQ(habit_hit_test(hx[i], hy[i], hx, hy, 4, 30), i);
+  int mx[4], my[4];
+  habit_arc_positions(4, 120, 120, 93, mx, my);
+  for (int i = 0; i < 4; i++)
+    CHECK(mx[i] >= 0 && mx[i] < 240 && my[i] >= 0 && my[i] < 240);
+
+  // 贴纸半径随屏幕缩放；圆命中包含边界
+  CHECK_EQ(habit_sticker_radius(360), 30);
+  CHECK_EQ(habit_sticker_radius(240), 20);
+  CHECK(circle_hit(10, 10, 10, 10, 0));
+  CHECK(circle_hit(10, 40, 10, 10, 30));
+  CHECK(!circle_hit(10, 41, 10, 10, 30));
+  CHECK(!circle_hit(50, 50, 10, 10, 30));
 
   // 触摸坐标映射：夹紧 + 可选镜像
   CHECK_EQ(touch_map_axis(100, 360, false), 100);

@@ -166,13 +166,18 @@ void habit_arc_positions(int count, int cx, int cy, int radius, int outX[4],
   }
 }
 
+int habit_sticker_radius(int screenW) { return 30 * screenW / 360; }
+
+bool circle_hit(int x, int y, int cx, int cy, int r) {
+  int dx = x - cx;
+  int dy = y - cy;
+  return dx * dx + dy * dy <= r * r;
+}
+
 int habit_hit_test(int x, int y, const int px[4], const int py[4], int count,
                    int radius) {
-  int r2 = radius * radius;
   for (int i = 0; i < count && i < 4; i++) {
-    int dx = x - px[i];
-    int dy = y - py[i];
-    if (dx * dx + dy * dy <= r2) return i;
+    if (circle_hit(x, y, px[i], py[i], radius)) return i;
   }
   return -1;
 }
