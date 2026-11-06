@@ -287,11 +287,20 @@ bool audioOk = false;
 #endif
 int volPct = 60;
 int volApplied = -1;
+bool volNight = false;      // 断网时沿用最后一次昼夜判断
 
 bool isNightVolume() {
   struct tm t;
-  if (!getLocalTime(&t, 10)) return false;
-  return t.tm_hour >= 20 || t.tm_hour < 6;
+  if (getLocalTime(&t, 10)) {
+    bool n = t.tm_hour >= 20 || t.tm_hour < 6 ||
+             (t.tm_hour == 6 && t.tm_min < 30);
+    if (n != volNight) {
+      volNight = n;
+      prefs.putBool("night", volNight);
+    }
+    return volNight;
+  }
+  return volNight;
 }
 
 void applyVolume() {
@@ -300,9 +309,9 @@ void applyVolume() {
   if (v == volApplied) return;
   volApplied = v;
 #if USE_SD_AUDIO
-  if (audioOk) audio.setVolume((uint8_t)map(v, 0, 100, 0, 21));
+  if (audioOk) audio.setVolume((uint8_t)((v * 21 + 50) / 100));
 #elif USE_DFPLAYER
-  if (mp3Ok) mp3.volume((uint8_t)map(v, 0, 100, 0, 30));
+  if (mp3Ok) mp3.volume((uint8_t)((v * 30 + 50) / 100));
 #endif
 }
 
@@ -790,6 +799,7 @@ void loadState() {
   todayKey = prefs.getString("day", "");
   streak = prefs.getInt("streak", 0);
   queue = prefs.getString("queue", "");
+  volNight = prefs.getBool("night", false);
   int mask = prefs.getInt("done", 0);
   loadHabits();
   for (int i = 0; i < habCount; i++) hab[i].done = (mask >> i) & 1;
@@ -980,8 +990,16 @@ bool syncState() {
 
     if (line.startsWith("V="))          protoVer = line.substring(2).toInt();
     else if (line.startsWith("VOL=")) {
-      int v = line.substring(4).toInt();
-      if (v >= 0 && v <= 100) { volPct = v; applyVolume(); }
+      String vs = line.substring(4);
+      vs.trim();
+      bool ok = vs.length() > 0;
+      for (unsigned int i = 0; i < vs.length(); i++) {
+        if (!isDigit(vs[i])) ok = false;
+      }
+      if (ok) {
+        int v = vs.toInt();
+        if (v >= 0 && v <= 100) { volPct = v; applyVolume(); }
+      }
     }
     else if (line.startsWith("PACK=")) {
       packVer = line.substring(5);
@@ -1359,6 +1377,10 @@ void loop() {
   // 1. 跨天检查
   static unsigned long lastDayCheck = 0;
   if (millis() - lastDayCheck > 5000) { lastDayCheck = millis(); rollDayIfNeeded(); }
+
+  // 音量昼夜切换/断网重算：不依赖服务器是否在线
+  static unsigned long lastVolCheck = 0;
+  if (millis() - lastVolCheck > 30000) { lastVolCheck = millis(); applyVolume(); }
 
   // 2b. 输入：按键（DevKitC）或触摸（1.85）
   int a = readBtn(btnA);

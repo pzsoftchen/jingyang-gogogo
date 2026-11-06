@@ -885,10 +885,10 @@ def open_questions_count(conn):
 
 
 def questions_for_parent(conn, answered_limit=8):
-    """问题罐：开放项置顶，最近已答垫底。"""
+    """问题罐：可回答项（ask/draft）置顶，最近已答垫底；pending 只走“待补内容”。"""
     open_rows = conn.execute(
         "SELECT id,question,answer,status,created,answered FROM questions"
-        " WHERE status IN ('ask','pending','draft') ORDER BY id DESC"
+        " WHERE status IN ('ask','draft') ORDER BY id DESC"
     ).fetchall()
     answered_rows = conn.execute(
         "SELECT id,question,answer,status,created,answered FROM questions"
@@ -1330,14 +1330,14 @@ h2{font-size:14px;color:#8b97a6;margin:28px 0 8px;font-weight:normal}
 .item{background:#12171d;border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
 .item span{color:#8b97a6;font-size:12px;display:block}
 a{color:#ff6b9d}
-body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#8B735E;--accent:#E76F51;--accent-ink:#FFF8EC}
+body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#75604A;--accent:#E76F51;--accent-ink:#2A1A14}
 body.night{--bg:#1B2340;--card:#242E4F;--line:#3A466F;--fg:#FFF4D6;--dim:#9EA9C8;--accent:#FF8A65;--accent-ink:#2A1A14}
 body{background:var(--bg);color:var(--fg)}
 .sub,.hint,h2,.item span{color:var(--dim)}
 input{background:var(--card);color:var(--fg);border-color:var(--line)}
 button{background:var(--accent);color:var(--accent-ink)}
 .item{background:var(--card)}
-a{color:var(--accent)}
+a{color:var(--fg)}
 </style></head><body class="{{THEME}}"><div class="w">
 <h1>记一个问题</h1>
 <div class="sub">他说了什么？记下来，回家一起找答案。</div>
@@ -1396,7 +1396,8 @@ table.firsts td:first-child{color:var(--dim);width:130px}
 .nav a,.nav button{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:999px;
       padding:11px 16px;font-size:14px;text-decoration:none;cursor:pointer}
 @media print{
-  body{background:#fff;--ink:#3E3228;--dim:#8B735E;--line:#EADAC6;--gold:#E76F51;--bg:#fff;--card:#fff}
+  body, body.day, body.night{background:#FFF8EC;color:#3E3228;
+    --ink:#3E3228;--dim:#75604A;--line:#EADAC6;--gold:#8A5A00;--bg:#FFF8EC;--card:#FFF8EC}
   .nav{display:none}
   .wrap{padding:0;max-width:none}
   h2{page-break-after:avoid}
@@ -1604,9 +1605,9 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{CHILD}}的习惯 · 家长端</title>
 <style>
-  body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#8B735E;
-        --ok:#2F6F63;--okfill:#5BC8B0;--warn:#E76F51;--pink:#E76F51;--gold:#FFC93C;
-        --panel:#F3E5D3;--input:#FFFDF7;--accent-ink:#FFF8EC;
+  body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#75604A;
+        --ok:#2F6F63;--okfill:#5BC8B0;--warn:#E76F51;--pink:#E76F51;--gold:#8A5A00;
+        --panel:#F3E5D3;--input:#FFFDF7;--accent-ink:#2A1A14;
         --sun:#FFB703;--ray:#FFC93C;--ink:#4A3B32;--cheek:#FF8FA3;--cap:#7C6FD6;}
   body.night{--bg:#1B2340;--card:#242E4F;--line:#3A466F;--fg:#FFF4D6;--dim:#9EA9C8;
         --ok:#5BC8B0;--okfill:#5BC8B0;--warn:#FF8A65;--pink:#FF8A65;--gold:#FFE8A3;

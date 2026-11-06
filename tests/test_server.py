@@ -737,6 +737,13 @@ class NudgeHttpTests(HttpBase, Base):
         code, body = self.get("/")
         self.assertNotIn("问题等你处理", body.decode("utf-8"))
 
+    def test_pending_question_not_duplicated(self):
+        server.add_question_pending(self.conn, "动物")
+        code, body = self.get("/")
+        html = body.decode("utf-8")
+        self.assertIn("待补内容", html)
+        self.assertNotIn("「」", html, "待补内容不能被渲染成空的普通问题")
+
 
 class MoreHabitsTests(HttpBase, Base):
     def test_today_records_and_revoke_live_in_more(self):
@@ -792,6 +799,16 @@ class FirmwareVolumeTests(unittest.TestCase):
         self.assertIn("audio.setVolume", src)
         self.assertIn("mp3.volume", src)
 
+    def test_firmware_volume_rechecks_night_and_validates(self):
+        src = open(os.path.join(os.path.dirname(HERE), "firmware", "habit_coach",
+                                "habit_coach.ino"), encoding="utf-8").read()
+        self.assertIn("lastVolCheck", src, "音量必须定期重算，不能只在同步时算")
+        self.assertIn("isDigit", src, "非法 VOL= 不能被当成 0")
+        self.assertIn("volNight", src, "断网时沿用最后一次昼夜判断")
+        self.assertIn("(v * 21 + 50) / 100", src, "1.85 音量映射应四舍五入")
+        self.assertIn("(v * 30 + 50) / 100", src, "DFPlayer 音量映射应四舍五入")
+        self.assertIn("t.tm_min < 30", src, "夜间边界应为 06:30")
+
 
 class QuickAlbumThemeTests(HttpBase, Base):
     def test_quick_has_theme_and_toggle(self):
@@ -805,4 +822,43 @@ class QuickAlbumThemeTests(HttpBase, Base):
         html = body.decode("utf-8")
         self.assertIn('class="%s"' % server.theme_now(), html)
         self.assertIn("@media print", html)
+
+    def test_album_print_block_overrides_night_tokens(self):
+        block = re.search(r"@media print\s*\{(.*?)\}", server.ALBUM_CSS, re.S).group(1)
+        self.assertIn("body.night", block,
+                      "夜间主题的 CSS 变量必须被打印规则覆盖")
+
+
+class ContrastTests(unittest.TestCase):
+    @staticmethod
+    def _lum(hexcolor):
+        h = hexcolor.lstrip("#")
+        vals = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+        vals = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+                for v in vals]
+        return 0.2126 * vals[0] + 0.7152 * vals[1] + 0.0722 * vals[2]
+
+    def _contrast(self, a, b):
+        la, lb = self._lum(a), self._lum(b)
+        hi, lo = max(la, lb), min(la, lb)
+        return (hi + 0.05) / (lo + 0.05)
+
+    @staticmethod
+    def _tokens(css, name):
+        block = re.search(r"body\.day\s*\{(.*?)\}", css, re.S).group(1)
+        return dict(re.findall(r"(--[\w-]+)\s*:\s*(#[0-9A-Fa-f]{6})", block))
+
+    def test_day_theme_primary_pairs_meet_aa(self):
+        page = self._tokens(server.PAGE, "page")
+        quick = self._tokens(server.QUICK_HTML, "quick")
+        pairs = [
+            (page["--gold"], page["--card"], "album link"),
+            (page["--accent-ink"], page["--pink"], "primary button"),
+            (page["--dim"], page["--bg"], "quiet text"),
+            (quick["--accent-ink"], quick["--accent"], "quick button"),
+            (quick["--dim"], quick["--bg"], "quick quiet text"),
+        ]
+        for fg, bg, label in pairs:
+            self.assertGreaterEqual(self._contrast(fg, bg), 4.5,
+                                    "%s: %s on %s" % (label, fg, bg))
 
