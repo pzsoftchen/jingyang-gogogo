@@ -16,3 +16,9 @@ __pycache__/
 # ---- 临时产物 ----
 *.log
 tmp.aiff
+
+# ---- 可视化讨论产物 ----
+.superpowers/
+
+# ---- 隔离工作区 ----
+.claude/worktrees/
