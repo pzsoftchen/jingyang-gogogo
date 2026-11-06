@@ -29,6 +29,7 @@
 #include <Preferences.h>
 #include <Arduino_GFX_Library.h>
 #include "habit_icons.h"      // 习惯 emoji 图标（由 tools/gen_icons.py 生成）
+#include "st77916_185c_init.h" // 1.85C 专用 ST77916 厂商初始化表
 #include <esp_heap_caps.h>
 #if __has_include(<esp_arduino_version.h>)
 #include <esp_arduino_version.h>
@@ -97,7 +98,7 @@
   #define LCD_SCK   40
   #define LCD_CS    21
   #define LCD_BL     5
-  #define LCD_RST_EXIO 2      // 挂在 TCA9554 的 P2 上，不是 GPIO
+  #define LCD_RST_EXIO 0      // 官方 1.85C：LCD/触摸复位在 TCA9554 P0/P1，不是 GPIO
   // 触摸 CST816：1.85 用独立总线(1/3)；1.85C 与主 I2C 共用(11/10)
   #if BOARD == BOARD_WS_1_85C
     #define TP_SDA   11
@@ -110,9 +111,10 @@
   #endif
   #define TP_INT     4
   #define TP_RST_EXIO 1       // TCA9554 P1
-  // 系统 I2C（TCA9554 / RTC / IMU 共用）
-  #define SYS_SDA   10
-  #define SYS_SCL   11
+  // 系统 I2C（TCA9554 / RTC / IMU 共用）：SDA=GPIO11, SCL=GPIO10
+  // 注意：1.85C 的触摸也挂在这条总线上，写反会读到 0xFF。
+  #define SYS_SDA   11
+  #define SYS_SCL   10
   // I2S 音频（PCM5101 → 功放 → 喇叭）
   #define I2S_BCK   48
   #define I2S_LRCK  38
@@ -147,7 +149,10 @@
 #if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(LCD_CS, LCD_SCK, LCD_SDA0, LCD_SDA1, LCD_SDA2, LCD_SDA3);
 Arduino_GFX *gfx = new Arduino_ST77916(bus, GFX_NOT_DEFINED /* RST 走 TCA9554 */, 0 /* rotation */,
-                                       true /* IPS */, SCREEN_W, SCREEN_H);
+                                       true /* IPS */, SCREEN_W, SCREEN_H,
+                                       0, 0, 0, 0,
+                                       st77916_185c_init_operations,
+                                       sizeof(st77916_185c_init_operations));
 #else
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, GFX_NOT_DEFINED);
 Arduino_GFX *gfx = new Arduino_GC9A01(bus, TFT_RST, 0, true);
@@ -225,6 +230,8 @@ enum { EXPR_IDLE = 0, EXPR_HAPPY, EXPR_BLINK, EXPR_TALK, EXPR_SURPRISED,
 #define C_BG       0x0861   // 深夜蓝黑
 #define C_FACE     0xFE60   // 暖黄
 #define C_INK      0x18E3
+#define C_EXPR     0xFFE0   // 表情线条：亮黄，保证在深色背景上可见
+#define C_PUPIL    0x0861   // 眼睛高光/瞳孔：与背景同色
 #define C_STAR_ON  0xFFE0
 #define C_STAR_OFF 0x2945
 #define C_TXT      0xC618
@@ -262,16 +269,16 @@ String queue = "";           // 离线打卡队列："brush@2026-10-30;"
 bool postCheckin(const String &habit);
 void postPath(const String &path);
 String deviceQuery();
+String apiUrl(const String &path);
 void setBanner(const String &s, unsigned long ms = 4000);
 void say(int track);
 
 // ======================= 音频 =======================
 #if USE_SD_AUDIO
 #include <SD_MMC.h>
-#if __has_include(<Audio.h>)
+// 直接 include：用 __has_include 判断时编译器还没拿到库路径，会把自己跳过。
 #include <Audio.h>
 Audio audio;
-#endif
 #endif
 
 // 兼容 ESP32 Arduino core 2.x 与 3.x 的 LEDC API
@@ -303,7 +310,6 @@ bool audioOk = false;
 
 // 1.85：TF 卡（SDMMC 1 线）+ PCM5101 I2S，播 /mp3/xxxx.mp3
 void audioInit() {
-#if __has_include(<Audio.h>)
   SD_MMC.setPins(SD_CLK, SD_CMD, SD_D0);
   if (!SD_MMC.begin("/sdcard", true)) {
     Serial.println("[audio] TF 卡挂载失败（确认卡是 FAT32，里面有 mp3/ 目录）");
@@ -313,15 +319,10 @@ void audioInit() {
   audio.setVolume(12);          // 0-21；孩子房间建议 8-12
   audioOk = true;
   Serial.println("[audio] TF + I2S OK");
-#else
-  Serial.println("[audio] 没装 ESP32-audioI2S 库，跳过");
-#endif
 }
 
 void audioLoop() {
-#if __has_include(<Audio.h>)
   if (audioOk) audio.loop();
-#endif
 }
 #else
 void audioInit() {}
@@ -330,14 +331,12 @@ void audioLoop() {}
 
 void say(int track) {
 #if USE_SD_AUDIO
-#if __has_include(<Audio.h>)
   if (audioOk && track > 0) {
     char path[24];
     snprintf(path, sizeof(path), "/mp3/%04d.mp3", track);
     audio.connecttoFS(SD_MMC, path);
     return;
   }
-#endif
 #elif USE_DFPLAYER
   if (mp3Ok && track > 0) { mp3.play((uint16_t)track); return; }
 #endif
@@ -381,59 +380,59 @@ void drawEyes(int mode) {
   int e = K(14), hi = K(4);
   // 眨眼：一只闭一只圆
   if (mode == EXPR_WINK) {
-    ui->drawLine(lx - e, ey, lx + e, ey, C_INK);
-    ui->fillCircle(rx, ey, K(12), C_INK);
-    ui->fillCircle(rx + hi, ey - hi, hi, C_FACE);
+    ui->drawLine(lx - e, ey, lx + e, ey, C_EXPR);
+    ui->fillCircle(rx, ey, K(12), C_EXPR);
+    ui->fillCircle(rx + hi, ey - hi, hi, C_PUPIL);
     return;
   }
   // 好奇：一大一小
   if (mode == EXPR_CURIOUS) {
-    ui->fillCircle(lx, ey, K(14), C_INK);
-    ui->fillCircle(rx, ey, K(8), C_INK);
-    ui->fillCircle(lx + hi, ey - hi, hi, C_FACE);
-    ui->fillCircle(rx + K(2), ey - K(2), K(3), C_FACE);
+    ui->fillCircle(lx, ey, K(14), C_EXPR);
+    ui->fillCircle(rx, ey, K(8), C_EXPR);
+    ui->fillCircle(lx + hi, ey - hi, hi, C_PUPIL);
+    ui->fillCircle(rx + K(2), ey - K(2), K(3), C_PUPIL);
     return;
   }
   // 惊讶：更大的圆眼 + 高光偏上
   if (mode == EXPR_SURPRISED) {
-    ui->fillCircle(lx, ey, K(15), C_INK);
-    ui->fillCircle(rx, ey, K(15), C_INK);
-    ui->fillCircle(lx + hi, ey - K(6), hi, C_FACE);
-    ui->fillCircle(rx + hi, ey - K(6), hi, C_FACE);
+    ui->fillCircle(lx, ey, K(15), C_EXPR);
+    ui->fillCircle(rx, ey, K(15), C_EXPR);
+    ui->fillCircle(lx + hi, ey - K(6), hi, C_PUPIL);
+    ui->fillCircle(rx + hi, ey - K(6), hi, C_PUPIL);
     return;
   }
   if (mode == 2 || mode == EXPR_SLEEPY) {
-    ui->drawLine(lx - e, ey, lx + e, ey, C_INK);
-    ui->drawLine(rx - e, ey, rx + e, ey, C_INK);
+    ui->drawLine(lx - e, ey, lx + e, ey, C_EXPR);
+    ui->drawLine(rx - e, ey, rx + e, ey, C_EXPR);
     return;
   }
   if (mode == 1 || mode == EXPR_HAPPY) {
-    ui->drawLine(lx - e, ey + K(6), lx, ey - K(8), C_INK);
-    ui->drawLine(lx, ey - K(8), lx + e, ey + K(6), C_INK);
-    ui->drawLine(rx - e, ey + K(6), rx, ey - K(8), C_INK);
-    ui->drawLine(rx, ey - K(8), rx + e, ey + K(6), C_INK);
+    ui->drawLine(lx - e, ey + K(6), lx, ey - K(8), C_EXPR);
+    ui->drawLine(lx, ey - K(8), lx + e, ey + K(6), C_EXPR);
+    ui->drawLine(rx - e, ey + K(6), rx, ey - K(8), C_EXPR);
+    ui->drawLine(rx, ey - K(8), rx + e, ey + K(6), C_EXPR);
     return;
   }
-  ui->fillCircle(lx, ey, K(12), C_INK);
-  ui->fillCircle(rx, ey, K(12), C_INK);
-  ui->fillCircle(lx + hi, ey - hi, hi, C_FACE);
-  ui->fillCircle(rx + hi, ey - hi, hi, C_FACE);
+  ui->fillCircle(lx, ey, K(12), C_EXPR);
+  ui->fillCircle(rx, ey, K(12), C_EXPR);
+  ui->fillCircle(lx + hi, ey - hi, hi, C_PUPIL);
+  ui->fillCircle(rx + hi, ey - hi, hi, C_PUPIL);
 }
 
 void drawMouth(int mode) {
   int cx = SCREEN_W / 2, my = K(132);
   // 惊讶：小圆嘴
-  if (mode == EXPR_SURPRISED) { ui->fillCircle(cx, my + K(2), K(9), C_INK); return; }
+  if (mode == EXPR_SURPRISED) { ui->fillCircle(cx, my + K(2), K(9), C_EXPR); return; }
   // 好奇：歪嘴
   if (mode == EXPR_CURIOUS) {
-    ui->drawLine(cx - K(10), my + K(4), cx + K(2), my - K(2), C_INK);
-    ui->drawLine(cx + K(2), my - K(2), cx + K(13), my + K(3), C_INK);
+    ui->drawLine(cx - K(10), my + K(4), cx + K(2), my - K(2), C_EXPR);
+    ui->drawLine(cx + K(2), my - K(2), cx + K(13), my + K(3), C_EXPR);
     return;
   }
   // 困：小弧 + zz
   if (mode == EXPR_SLEEPY) {
-    ui->drawLine(cx - K(8), my + K(3), cx, my - K(2), C_INK);
-    ui->drawLine(cx, my - K(2), cx + K(8), my + K(3), C_INK);
+    ui->drawLine(cx - K(8), my + K(3), cx, my - K(2), C_EXPR);
+    ui->drawLine(cx, my - K(2), cx + K(8), my + K(3), C_EXPR);
     ui->setTextColor(C_ACCENT);
     ui->setTextSize(1);
     ui->setCursor(cx + K(28), my - K(26));
@@ -441,14 +440,14 @@ void drawMouth(int mode) {
     return;
   }
   if (mode == 1 || mode == EXPR_HAPPY) {
-    ui->fillCircle(cx, my, K(20), C_INK);
-    ui->fillCircle(cx, my - K(8), K(20), C_FACE);
+    ui->fillCircle(cx, my, K(20), C_EXPR);
+    ui->fillCircle(cx, my - K(8), K(20), C_PUPIL);
     return;
   }
-  if (mode == 3) { ui->fillCircle(cx, my + K(2), K(8), C_INK); return; }
-  ui->drawLine(cx - K(16), my, cx - K(6), my + K(7), C_INK);
-  ui->drawLine(cx - K(6), my + K(7), cx + K(6), my + K(7), C_INK);
-  ui->drawLine(cx + K(6), my + K(7), cx + K(16), my, C_INK);
+  if (mode == 3) { ui->fillCircle(cx, my + K(2), K(8), C_EXPR); return; }
+  ui->drawLine(cx - K(16), my, cx - K(6), my + K(7), C_EXPR);
+  ui->drawLine(cx - K(6), my + K(7), cx + K(6), my + K(7), C_EXPR);
+  ui->drawLine(cx + K(6), my + K(7), cx + K(16), my, C_EXPR);
 }
 
 void drawStar(int cx, int cy, int r, bool filled, bool sel) {
@@ -625,10 +624,8 @@ bool fetchCard(int idx) {
     if (!cardBuf) { setBanner("NO MEM", 3000); return false; }
   }
   HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/api/card.rgb565?i=" + String(idx) + "&s=" + String(SCREEN_W) +
-               "&d=" + DEVICE_ID;
-  http.begin(url);
+  http.begin(apiUrl(String("/api/card.rgb565?i=") + String(idx) +
+                    "&s=" + String(SCREEN_W)));
   http.setTimeout(8000);
   int code = http.GET();
   if (code != 200) { http.end(); return false; }
@@ -810,28 +807,55 @@ void queueCheckin(int idx) {
 void postPath(const String &path) {
   if (!wifiOk) return;                    // 断网就只是没记上，不打扰孩子
   HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + path;
-  http.begin(url);
+  http.begin(apiUrl(path));
   http.setTimeout(4000);
   http.addHeader("Content-Type", "text/plain");
   http.POST("");
   http.end();
 }
 
+// URL 查询参数编码：token 可能是 base64（含 + / =），不编码会被服务器解析错。
+String urlEncodeComponent(const String &s) {
+  static const char hex[] = "0123456789ABCDEF";
+  String out;
+  out.reserve(s.length() * 3);
+  for (size_t i = 0; i < s.length(); i++) {
+    uint8_t c = (uint8_t)s[i];
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += (char)c;
+    } else {
+      out += '%';
+      out += hex[(c >> 4) & 0x0F];
+      out += hex[c & 0x0F];
+    }
+  }
+  return out;
+}
+
 // 统一拼设备身份参数：d=设备号（&t=令牌，配了才带）
 String deviceQuery() {
-  String s = String("?d=") + DEVICE_ID;
+  String s = String("d=") + urlEncodeComponent(DEVICE_ID);
   String tk = String(DEVICE_TOKEN);
-  if (tk.length()) s += String("&t=") + tk;
+  if (tk.length()) s += String("&t=") + urlEncodeComponent(tk);
+  if (WiFi.status() == WL_CONNECTED) {
+    s += String("&rssi=") + String(WiFi.RSSI());
+  }
   return s;
+}
+
+// 所有设备 API 都必须走这里：少了 d/t，开 DEVICE_TOKEN 后请求会被 401。
+String apiUrl(const String &path) {
+  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + path;
+  url += (path.indexOf('?') >= 0) ? "&" : "?";
+  url += deviceQuery();
+  return url;
 }
 
 bool postCheckin(const String &habit) {
   if (!wifiOk) return false;
   HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/api/checkin.txt?habit=" + habit + "&d=" + DEVICE_ID;
-  http.begin(url);
+  http.begin(apiUrl(String("/api/checkin.txt?habit=") + habit));
   http.setTimeout(2500);
   int code = http.POST("");
   bool ok = (code == 200 || code == 409);   // 409 = 今天已打过
@@ -854,9 +878,7 @@ void flushQueue() {
 void postAck(int id) {
   if (!wifiOk) return;
   HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT +
-               "/api/ack.txt?id=" + String(id);
-  http.begin(url);
+  http.begin(apiUrl(String("/api/ack.txt?id=") + String(id)));
   http.setTimeout(2500);
   http.POST("");
   http.end();
@@ -918,9 +940,7 @@ void parseHabitLine(const String &line) {
 bool syncState() {
   if (!wifiOk) return false;
   HTTPClient http;
-  String url = String("http://") + SERVER_HOST + ":" + SERVER_PORT + "/api/state.txt"
-               + deviceQuery();
-  http.begin(url);
+  http.begin(apiUrl("/api/state.txt"));
   http.setTimeout(2500);
   int code = http.GET();
   if (code != 200) { http.end(); return false; }
@@ -1075,14 +1095,14 @@ uint8_t tcaRead(uint8_t reg) {
   return Wire.available() ? Wire.read() : 0xFF;
 }
 
-// LCD_RST=EXIO2 / TP_RST=EXIO1 / SD_CS=EXIO3 都挂在这颗扩展器上
+// 官方 1.85C：LCD/触摸复位在 P0/P1；P2/P3 也配成输出并拉高（SD_CS 等）
 void tca9554Init() {
   Wire.begin(SYS_SDA, SYS_SCL, 400000);
-  tcaWrite(0x03, 0b11110001);   // 配置：P1/P2/P3 输出，其余输入
-  tcaWrite(0x01, 0b00000000);   // 先把复位脚拉低
-  delay(20);
-  tcaWrite(0x01, 0b00001110);   // TP_RST / LCD_RST / SD_CS 拉高
-  delay(120);
+  tcaWrite(0x03, 0b11110000);   // 配置：P0~P3 全部输出
+  tcaWrite(0x01, 0b00000000);   // 先把复位脚全部拉低
+  delay(300);
+  tcaWrite(0x01, 0b00001111);   // P0~P3 拉高，释放 LCD/触摸复位
+  delay(300);
   Serial.printf("[tca9554] cfg=%02X out=%02X\n", tcaRead(0x03), tcaRead(0x01));
 }
 #endif
@@ -1199,6 +1219,48 @@ void handleSerial() {
     }
     else if (c == '1') { say(1); } else if (c == '2') { say(2); }
     else if (c == '3') { say(3); } else if (c == '8') { say(8); }
+    else if (c == 'd') {                    // 屏幕自检：红/绿/蓝/白/黑
+      const uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000};
+      const char *names[] = {"RED", "GREEN", "BLUE", "WHITE", "BLACK"};
+      for (uint8_t round = 0; round < 3; round++) {
+        for (uint8_t i = 0; i < 5; i++) {
+          ui->fillScreen(colors[i]);
+          if (canvasOk) canvas->flush();
+          Serial.printf("display %s\n", names[i]);
+          delay(1000);
+        }
+      }
+      needRedraw = true;
+      Serial.println("display test done");
+    }
+    else if (c == 'D') {                    // 绕过 canvas，直接写屏
+      const uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000};
+      const char *names[] = {"RED", "GREEN", "BLUE", "WHITE", "BLACK"};
+      for (uint8_t round = 0; round < 3; round++) {
+        for (uint8_t i = 0; i < 5; i++) {
+          gfx->fillScreen(colors[i]);
+          Serial.printf("direct %s\n", names[i]);
+          delay(1000);
+        }
+      }
+      needRedraw = true;
+      Serial.println("direct test done");
+    }
+    else if (c == 'G') {                    // 几何测试：看坐标是否错位/重复
+      gfx->fillScreen(0x0000);
+      gfx->drawRect(0, 0, SCREEN_W, SCREEN_H, 0xFFFF);
+      gfx->fillRect(0, 0, 60, 60, 0xF800);       // 红
+      gfx->fillRect(60, 0, 60, 60, 0x07E0);      // 绿
+      gfx->fillRect(120, 0, 60, 60, 0x001F);     // 蓝
+      gfx->fillRect(180, 0, 60, 60, 0xFFE0);     // 黄
+      gfx->fillRect(0, 60, 60, 60, 0xF81F);      // 品红
+      gfx->fillRect(0, 120, 60, 60, 0x07FF);     // 青
+      gfx->drawLine(0, 0, SCREEN_W - 1, SCREEN_H - 1, 0xFFFF);
+      gfx->drawLine(0, SCREEN_H - 1, SCREEN_W - 1, 0, 0xFFFF);
+      Serial.println("geometry test drawn");
+      delay(7000);
+      needRedraw = true;
+    }
   }
 }
 
@@ -1225,9 +1287,12 @@ void setup() {
   digitalWrite(TFT_BL, HIGH);
 #endif
 
-  gfx->begin();
+  bool gfxOk = gfx->begin(40000000);   // 先降到 40 MHz，排除 QSPI 时序/信号问题
+  Serial.printf("[ui] gfx %s\n", gfxOk ? "OK" : "FAIL");
   canvas = new Arduino_Canvas(SCREEN_W, SCREEN_H, gfx);
-  canvasOk = canvas->begin();
+  // gfx 已经初始化过 QSPI；Canvas 默认会再调一次 gfx->begin()，
+  // ESP32 QSPI 第二次 spi_bus_initialize 会 ESP_ERROR_CHECK abort。
+  canvasOk = canvas->begin(GFX_SKIP_OUTPUT_BEGIN);
   ui = canvasOk ? (Arduino_GFX *)canvas : gfx;
   Serial.printf("[ui] canvas %s\n", canvasOk ? "OK" : "FAIL(直接写屏)");
 

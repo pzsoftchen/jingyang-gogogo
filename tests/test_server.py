@@ -14,6 +14,7 @@
 
 import datetime
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -232,6 +233,43 @@ class CardTests(Base):
         _q, imgs, n = server.card_pages(self.conn, qid)
         self.assertGreaterEqual(n, 1)
 
+    def _insert_answered(self, question, answer, minute):
+        return self.conn.execute(
+            "INSERT INTO questions(question,answer,status,announced,created)"
+            " VALUES(?,?,?,?,?)",
+            (question, answer, "answered", 0, "2026-11-06 08:%02d:00" % minute),
+        ).lastrowid
+
+    def test_surprise_card_matches_the_announced_question(self):
+        """播报哪一条问题的答案，屏幕就必须显示哪一条。"""
+        first = self._insert_answered("问题一", "一句话：答案一。", 0)
+        self._insert_answered("问题二", "一句话：答案二。", 30)
+        self.conn.commit()
+
+        self.assertEqual(server.push_daily_surprise(self.conn), "question")
+        q, _imgs, _n = server.card_pages(self.conn)
+        self.assertEqual(q["id"], first, "卡片必须绑定到刚刚播报的那条问题")
+
+    def test_answer_announcement_binds_card_to_that_question(self):
+        """后答旧问题时，屏幕不能跳到更新的那条答案。"""
+        older = self._insert_answered("问题一", "一句话：旧答案。", 0)
+        self._insert_answered("问题二", "一句话：新答案。", 30)
+        self.conn.commit()
+
+        server.answer_question(self.conn, older, "一句话：改过的旧答案。", announce=True)
+        q, _imgs, _n = server.card_pages(self.conn)
+        self.assertEqual(q["id"], older, "卡片必须绑定到刚刚播报的那条问题")
+
+    def test_missing_card_ref_falls_back_to_latest_answer(self):
+        """旧库没有 card_ref：不能因为没有绑定就显示不出卡。"""
+        self._insert_answered("问题一", "一句话：旧答案。", 0)
+        newer = self._insert_answered("问题二", "一句话：新答案。", 30)
+        self.conn.execute("DELETE FROM settings WHERE key='card_ref'")
+        self.conn.commit()
+
+        q, _imgs, _n = server.card_pages(self.conn)
+        self.assertEqual(q["id"], newer)
+
 
 class ProtocolTests(Base):
     def test_state_text_has_ten_fields(self):
@@ -256,6 +294,85 @@ class ProtocolTests(Base):
         msgs = [l for l in text.splitlines() if l.startswith("MSG=")]
         self.assertTrue(msgs)
         self.assertEqual(msgs[-1].split("|")[1], "107")
+
+    def test_state_text_sends_one_message_per_sync(self):
+        """设备端 say() 会打断上一条，批量下发会让前面的消息永久丢失。"""
+        server.add_approval(self.conn, "第一句", "爸爸妈妈", track=31)
+        server.add_approval(self.conn, "第二句", "爸爸妈妈", track=32)
+        self.conn.commit()
+
+        msgs = [l for l in server.state_as_text(self.conn).splitlines()
+                if l.startswith("MSG=")]
+        self.assertEqual(len(msgs), 1, "一次同步只能送一条待播消息")
+        self.assertEqual(msgs[0].split("|")[1], "31", "先送最早的一条")
+
+        mid = int(msgs[0][4:].split("|")[0])
+        server.ack_approval(self.conn, mid)
+        msgs2 = [l for l in server.state_as_text(self.conn).splitlines()
+                 if l.startswith("MSG=")]
+        self.assertEqual(len(msgs2), 1)
+        self.assertEqual(msgs2[0].split("|")[1], "32", "ack 之后才送下一条")
+
+
+class FirmwareContractTests(unittest.TestCase):
+    """固件没法在主机上跑，至少守住“所有设备 API 请求都带身份”这个契约。"""
+
+    def _source(self):
+        path = os.path.join(os.path.dirname(HERE), "firmware", "habit_coach",
+                            "habit_coach.ino")
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_all_device_api_calls_use_identity_helper(self):
+        src = self._source()
+        self.assertIn("String apiUrl(", src, "缺少统一的 API URL 构造器")
+        self.assertIn("url += deviceQuery();", src, "apiUrl 没有真正拼上身份参数")
+        calls = re.findall(r"http\.begin\(\s*(.*?)\s*\);", src, re.S)
+        self.assertTrue(calls)
+        for arg in calls:
+            self.assertTrue(
+                arg.startswith("apiUrl("),
+                "设备 API 请求必须走 apiUrl()，否则会漏掉 d/t 参数：%s" % arg,
+            )
+
+    def test_device_query_percent_encodes_identity(self):
+        """base64 token 常含 + / =，不编码会被服务器解析错（+ 变空格）。"""
+        src = self._source()
+        self.assertIn("String urlEncodeComponent(", src)
+        self.assertIn("urlEncodeComponent(DEVICE_ID)", src)
+        self.assertIn("urlEncodeComponent(tk)", src)
+
+    def test_185c_shared_i2c_uses_sda_11_scl_10(self):
+        """1.85C 的 TCA9554/CST816 共用 SDA=11 / SCL=10；写反会 cfg=FF。"""
+        src = self._source()
+        self.assertIn("#define SYS_SDA   11", src)
+        self.assertIn("#define SYS_SCL   10", src)
+
+    def test_canvas_does_not_reinitialize_qspi(self):
+        """Arduino_Canvas::begin() 默认会再调 gfx->begin()，QSPI 会 abort。"""
+        src = self._source()
+        self.assertIn("canvas->begin(GFX_SKIP_OUTPUT_BEGIN)", src)
+
+    def test_185c_resets_lcd_and_touch_via_p0_p1(self):
+        """1.85C 的 LCD/触摸复位在 TCA9554 P0/P1；P0 不能配成输入。"""
+        src = self._source()
+        self.assertIn("tcaWrite(0x03, 0b11110000)", src)
+        self.assertIn("tcaWrite(0x01, 0b00001111)", src)
+
+
+class DeviceStatusTests(Base):
+    def test_rssi_parser_rejects_invalid_values(self):
+        self.assertEqual(server.rssi_of({"rssi": ["-61"]}), -61)
+        self.assertIsNone(server.rssi_of({"rssi": ["abc"]}))
+        self.assertIsNone(server.rssi_of({"rssi": ["5"]}))
+        self.assertIsNone(server.rssi_of({}))
+
+    def test_touch_device_updates_ip_and_rssi(self):
+        server.touch_device(self.conn, "poc", "192.168.8.253", -61)
+        row = self.conn.execute(
+            "SELECT ip,rssi FROM devices WHERE id='poc'").fetchone()
+        self.assertEqual(row["ip"], "192.168.8.253")
+        self.assertEqual(row["rssi"], -61)
 
 
 # ============================ HTTP 端到端 ============================
@@ -358,6 +475,16 @@ class HttpTests(Base):
         self.assertEqual(code, 200)
         self.assertTrue(body.startswith(b"\x89PNG"))
 
+    def test_push_card_switches_from_zika_to_question(self):
+        """当前停在识字卡时，点「播放这张问题卡」必须切回问题卡。"""
+        server.push_card(self.conn, "牙")
+        qid = self.add_answered_question()
+
+        code, _ = self.post("/parent/push_card")
+        self.assertEqual(code, 200)
+        q, _imgs, _n = server.card_pages(self.conn)
+        self.assertEqual(q["id"], qid, "设备上的卡必须是被播报的那条问题")
+
     def test_habits_endpoint_enforces_max(self):
         # 选 6 件，应被拒绝（303 跳到 habmax）
         import urllib.parse
@@ -441,6 +568,27 @@ class HttpTests(Base):
         row = self.conn.execute("SELECT id FROM devices WHERE id='s3-test-1'").fetchone()
         self.assertIsNotNone(row)
 
+    def test_parent_page_shows_online_device_status(self):
+        """家长页首屏要能看到设备在线、IP 和 Wi-Fi 信号。"""
+        code, _ = self.get("/api/state.txt?d=poc&rssi=-61")
+        self.assertEqual(code, 200)
+        code, body = self.get("/")
+        self.assertEqual(code, 200)
+        html = body.decode("utf-8")
+        self.assertIn("设备在线", html)
+        self.assertIn("127.0.0.1", html)
+        self.assertIn("-61 dBm", html)
+
+    def test_parent_page_shows_offline_device_status(self):
+        self.conn.execute(
+            "UPDATE devices SET last_seen='2026-01-01 00:00:00' WHERE id='poc'")
+        self.conn.commit()
+        code, body = self.get("/")
+        self.assertEqual(code, 200)
+        html = body.decode("utf-8")
+        self.assertIn("设备离线", html)
+        self.assertIn("最后同步 01-01 00:00", html)
+
     def test_checkin_records_device(self):
         self.post("/api/checkin.txt?habit=brush&d=s3-abc")
         row = self.conn.execute(
@@ -462,6 +610,17 @@ class HttpTests(Base):
         try:
             code, _ = self.get("/")
             self.assertEqual(code, 200, "家长页不能被设备令牌挡住")
+        finally:
+            os.environ.pop("DEVICE_TOKEN", None)
+
+    def test_token_with_reserved_characters_must_be_percent_encoded(self):
+        """设备端必须对 token 做 URL 编码；未编码的 + 会被 parse_qs 解析成空格。"""
+        os.environ["DEVICE_TOKEN"] = "ab+cd/ef="
+        try:
+            code, _ = self.get("/api/state.txt?t=ab%2Bcd%2Fef%3D")
+            self.assertEqual(code, 200, "百分号编码后的 token 应通过")
+            code2, _ = self.get("/api/state.txt?t=ab+cd/ef=")
+            self.assertEqual(code2, 401, "未编码的 token 不应被接受")
         finally:
             os.environ.pop("DEVICE_TOKEN", None)
 

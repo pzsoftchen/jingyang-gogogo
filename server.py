@@ -190,7 +190,9 @@ def init_db():
             name      TEXT DEFAULT '',
             token     TEXT DEFAULT '',
             created   TEXT NOT NULL,
-            last_seen TEXT DEFAULT ''
+            last_seen TEXT DEFAULT '',
+            ip        TEXT DEFAULT '',
+            rssi      INTEGER DEFAULT NULL
         );
         CREATE TABLE IF NOT EXISTS content_packs(
             name    TEXT PRIMARY KEY,          -- 'voice'（预录语音包）
@@ -291,6 +293,11 @@ def init_db():
         conn.execute("ALTER TABLE questions ADD COLUMN category TEXT DEFAULT ''")
     if qcols and "announced" not in qcols:
         conn.execute("ALTER TABLE questions ADD COLUMN announced INTEGER DEFAULT 0")
+    devcols = {r["name"] for r in conn.execute("PRAGMA table_info(devices)")}
+    if "ip" not in devcols:
+        conn.execute("ALTER TABLE devices ADD COLUMN ip TEXT DEFAULT ''")
+    if "rssi" not in devcols:
+        conn.execute("ALTER TABLE devices ADD COLUMN rssi INTEGER DEFAULT NULL")
     # 默认设置
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('child_name',?)", (CHILD_NAME,))
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('coach_name',?)", (COACH_NAME,))
@@ -559,12 +566,98 @@ def token_ok(q, headers=None):
     return got == want
 
 
-def touch_device(conn, device_id):
+def rssi_of(q):
+    """设备上报的 Wi-Fi RSSI；不合法就返回 None，保留上一次的值。"""
+    try:
+        v = int((q.get("rssi") or [""])[0])
+    except (TypeError, ValueError):
+        return None
+    return v if -120 <= v <= 0 else None
+
+
+def touch_device(conn, device_id, ip="", rssi=None):
     conn.execute(
         "INSERT OR IGNORE INTO devices(id,name,created) VALUES(?,?,?)",
         (device_id, device_id, now_iso()))
-    conn.execute("UPDATE devices SET last_seen=? WHERE id=?", (now_iso(), device_id))
+    sets = ["last_seen=?"]
+    vals = [now_iso()]
+    if ip:
+        sets.append("ip=?")
+        vals.append(str(ip)[:45])
+    if rssi is not None:
+        sets.append("rssi=?")
+        vals.append(int(rssi))
+    vals.append(device_id)
+    conn.execute("UPDATE devices SET %s WHERE id=?" % ", ".join(sets), vals)
     conn.commit()
+
+
+def device_status(conn, device_id="poc"):
+    """家长页用的设备概况：在线、最后同步、IP、Wi-Fi 信号。"""
+    row = conn.execute(
+        "SELECT id,name,last_seen,ip,rssi FROM devices WHERE id=?", (device_id,)
+    ).fetchone()
+    if not row:
+        row = conn.execute(
+            "SELECT id,name,last_seen,ip,rssi FROM devices"
+            " ORDER BY last_seen DESC LIMIT 1").fetchone()
+    if not row:
+        return {"device_id": device_id, "online": False, "when": "未注册",
+                "last_seen": "", "ip": "", "rssi": None, "rssi_text": ""}
+
+    last = (row["last_seen"] or "").strip()
+    online = False
+    age = None
+    if last:
+        try:
+            dt = datetime.datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
+            age = max(0, int((datetime.datetime.now() - dt).total_seconds()))
+            online = age <= 45          # 设备 15 秒轮询，45 秒内算在线
+        except ValueError:
+            pass
+    if online:
+        when = "刚刚" if (age is not None and age < 10) else ("%d 秒前" % age)
+    else:
+        when = last[5:16] if last else "从未"
+
+    rssi = row["rssi"]
+    if rssi is None:
+        rssi_text = ""
+    else:
+        if rssi >= -55:
+            label = "强"
+        elif rssi >= -70:
+            label = "中"
+        else:
+            label = "弱"
+        rssi_text = "%d dBm · %s" % (rssi, label)
+    return {
+        "device_id": row["id"],
+        "online": online,
+        "when": when,
+        "last_seen": last,
+        "ip": (row["ip"] or "").strip(),
+        "rssi": rssi,
+        "rssi_text": rssi_text,
+    }
+
+
+def device_status_html(conn, device_id="poc"):
+    d = device_status(conn, device_id)
+    cls = "on" if d["online"] else "off"
+    if d["online"]:
+        state = ("设备在线 · 刚刚同步" if d["when"] == "刚刚"
+                 else "设备在线 · %s同步" % d["when"])
+    else:
+        state = "设备离线 · 最后同步 %s" % d["when"]
+    meta = []
+    if d["ip"]:
+        meta.append(d["ip"])
+    if d["rssi_text"]:
+        meta.append("Wi-Fi " + d["rssi_text"])
+    meta_html = ('<span class="devmeta">%s</span>' % " · ".join(meta)) if meta else ""
+    return ('<div class="devstatus %s"><span class="devdot"></span>'
+            '<span>%s</span>%s</div>' % (cls, state, meta_html))
 
 
 def voice_pack_version(conn):
@@ -652,10 +745,17 @@ def answer_question(conn, qid, answer, announce=True):
     conn.commit()
     if announce and take_push(conn, "surprise", "question:%d" % qid):
         clear_card_queue(conn)
+        set_question_card(conn, qid)
         add_approval(conn, "", "小豆", track=64, kind="question")
         conn.execute("UPDATE questions SET announced=1 WHERE id=?", (qid,))
         conn.commit()
     return True
+
+
+def set_question_card(conn, qid):
+    """把"当前卡"绑定到某条问题——语音播哪条，屏幕就必须显示哪条。"""
+    set_setting(conn, "card_kind", "question")
+    set_setting(conn, "card_ref", str(qid))
 
 
 def latest_answered(conn, qid=None):
@@ -700,7 +800,15 @@ def card_pages(conn, qid=None, size=None):
         set_setting(conn, "card_kind", "question")
         conn.commit()
 
-    q = latest_answered(conn, qid)
+    # 语音播报和屏幕必须是同一条问题：优先用播报时记下的 card_ref，
+    # 只有没有绑定（或旧库）时才回退到"最新答案"。
+    if qid is not None:
+        q = latest_answered(conn, qid)
+    else:
+        ref = get_setting(conn, "card_ref", "")
+        q = latest_answered(conn, int(ref)) if ref.isdigit() else None
+        if not q:
+            q = latest_answered(conn)
     if not q:
         return None, [], 0
     secs = cardrender.sections(q["answer"] or "")
@@ -919,6 +1027,7 @@ def push_daily_surprise(conn):
         if not take_push(conn, "surprise", "question:%d" % q["id"]):
             return ""
         clear_card_queue(conn)
+        set_question_card(conn, q["id"])
         add_approval(conn, "", "小豆", track=64, kind="question")
         conn.execute("UPDATE questions SET announced=1 WHERE id=?", (q["id"],))
         conn.commit()
@@ -1343,7 +1452,7 @@ def state_as_text(conn):
     H=brush|刷牙|1|21:10
     H=pack|收书包|1|21:12
     H=read|亲子阅读|0|
-    MSG=12|爸爸妈妈|今天你自己记得刷牙，爸爸看到了，很棒！
+    MSG=<id>|<voice_track>|<from_who>
     END
     """
     s = today_state(conn)
@@ -1358,7 +1467,7 @@ def state_as_text(conn):
         "STREAK=" + str(s["streak"]),
         "DONE=%d/%d" % (s["done_count"], s["total"]),
     ]
-    # 最近一条审核过的问题卡有几页（设备据此进"看卡片"模式）
+    # 当前绑定的卡片有几页（问题卡/识字卡；设备据此进"看卡片"模式）
     _q, _imgs, _n = card_pages(conn)
     lines.append("Q=%d" % _n)
 
@@ -1379,7 +1488,9 @@ def state_as_text(conn):
                 mt["rt"], mt["dt"], mt["h"], mt["m"], mt["seq"], mt["minsec"],
             )
         )
-    for a in s["approvals"]:
+    # 一次只送一条：设备端 say() 会打断上一条，批量下发会让前面的消息永久丢失。
+    # 设备 ack 后，下一次 15 秒同步再取下一条。
+    for a in s["approvals"][:1]:
         lines.append("MSG=%d|%d|%s" % (a["id"], a.get("track", 0), a["from_who"]))
     # 内容包版本：设备据此判断自己的 SD 卡语音是不是最新（将来 OTA 用）
     _pack = conn.execute(
@@ -1481,9 +1592,17 @@ PAGE = """<!doctype html>
   .albumLink{display:block;background:var(--card);border:1px solid var(--gold);
         border-radius:14px;padding:14px 16px;margin-bottom:14px;color:var(--gold);
         text-decoration:none;font-size:15px}
+  .devstatus{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+        background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:8px 12px;margin:0 0 14px;font-size:13px}
+  .devdot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:0 0 auto}
+  .devstatus.on .devdot{background:var(--ok);box-shadow:0 0 0 3px rgba(61,220,151,.12)}
+  .devmeta{margin-left:auto;color:var(--dim);font-size:12px}
 </style></head><body><div class="wrap">
   <h1>{{CHILD}}</h1>
   <div class="sub">今天 {{DAY}} · {{STAGENAME}} · 每天最多推 {{BUDGET}} 次内容</div>
+
+  {{DEVSTATUS}}
 
   {{NOTEBANNER}}
 
@@ -1845,6 +1964,7 @@ def render_page(conn, sent=""):
         "{{CHILD}}": s["child_name"],
         "{{COACH}}": s["coach_name"],
         "{{DAY}}": s["day"],
+        "{{DEVSTATUS}}": device_status_html(conn),
         "{{STREAK}}": str(st["streak"]),
         "{{BEST}}": str(st["best"]),
         "{{DONE}}": str(s["done_count"]),
@@ -1922,7 +2042,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/") and not token_ok(q, self.headers):
                 return self._send(401, "bad token", "text/plain")
             if path.startswith("/api/"):
-                touch_device(conn, device_id_of(q))
+                touch_device(conn, device_id_of(q), self.client_address[0], rssi_of(q))
             if path in ("/", "/index.html"):
                 code = (q.get("sent") or [""])[0]
                 sent = {
@@ -2019,7 +2139,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/") and not token_ok(q, self.headers):
                 return self._send(401, "bad token", "text/plain")
             if path.startswith("/api/"):
-                touch_device(conn, device_id_of(q))
+                touch_device(conn, device_id_of(q), self.client_address[0], rssi_of(q))
             # 极简记录页的提交（也是家长最常用的入口）
             if path == "/quick":
                 form = self._form()
@@ -2123,9 +2243,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(303, "", headers={"Location": "/?sent=zika"})
 
             if path == "/parent/push_card":
-                q, imgs, n = card_pages(conn)
-                if not imgs:
+                # 推"预览里正在显示的那张问题卡"；如果当前是识字卡，则退回最新答案。
+                q, imgs, _n = card_pages(conn)
+                if not imgs or get_setting(conn, "card_kind", "question") != "question":
+                    q = latest_answered(conn)
+                if not q:
                     return self._send(303, "", headers={"Location": "/?sent=qnon"})
+                set_question_card(conn, q["id"])
                 clear_card_queue(conn)
                 add_approval(conn, "", "小豆", track=64, kind="question")
                 conn.commit()
