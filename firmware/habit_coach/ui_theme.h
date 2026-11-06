@@ -19,6 +19,10 @@ struct Palette {
   uint8_t  brightness;   // 0-100
 };
 
+struct Rect {
+  int x, y, w, h;
+};
+
 struct SunGeom {
   int cx, cy;              // 太阳中心
   int bodyR, rayR;         // 本体半径 / 光芒外缘
@@ -49,6 +53,9 @@ void habit_arc_positions(int count, int cx, int cy, int radius, int outX[4], int
 int habit_sticker_radius(int screenW);
 int habit_hit_test(int x, int y, const int px[4], const int py[4], int count, int radius);
 bool circle_hit(int x, int y, int cx, int cy, int r);
+bool icon_pixel_opaque(uint16_t c);
+Rect progress_bar_rect(int screenW, int screenH);
+int animation_frames(int base, bool night);
 int touch_map_axis(int raw, int screenSize, bool mirror);
 void sun_ray_endpoints(Phase p, int cx, int cy, int bodyR, int rayR, int outX[8], int outY[8]);
 uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t);

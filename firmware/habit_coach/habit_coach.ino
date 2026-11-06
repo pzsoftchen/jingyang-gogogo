@@ -218,6 +218,7 @@ int seqN = 0, seqIdx = 0;
 #define VOICE_ONE_LEFT    9
 #define VOICE_TEACH_ME   11
 #define VOICE_THANKS     12
+#define VOICE_ALREADY_DONE 66  // 「这个已经做过啦」
 #define VOICE_MSG_GENERIC 19
 #define VOICE_EGG_BASE   400   // 0401~0420 彩蛋语音（低概率触发）
 #define VOICE_EGG_COUNT   20
@@ -233,12 +234,7 @@ int seqN = 0, seqIdx = 0;
 enum { EXPR_IDLE = 0, EXPR_HAPPY, EXPR_BLINK, EXPR_TALK, EXPR_SURPRISED,
        EXPR_WINK, EXPR_SLEEPY, EXPR_CURIOUS };
 
-// ======================= 旧庆祝动画调色板 =======================
-// 主界面/太阳已改用 ui_theme 的四幕 Palette；这里只保留庆祝动画还需要的颜色。
-#define C_INK      0x18E3
-#define C_STAR_ON  0xFFE0
-#define C_STAR_OFF 0x2945
-#define C_ACCENT   0xFD20
+// 主界面/太阳/庆祝动画均改用 ui_theme 的四幕 Palette，不再保留旧 C_* 常量。
 
 // ======================= 语音 =======================
 #if USE_DFPLAYER
@@ -260,7 +256,7 @@ bool weekCalValid = false;                                             // 服务
 bool weekCal[7] = {false, false, false, false, false, false, false};   // 本周一到周日
 int  weekday = 0;             // 1=周一 … 7=周日；0=未知
 int  volumePct = -1;          // 家长页音量 0-100；-1=服务器未下发
-bool nightMode = false;       // 由时段引擎更新
+bool nightMode = true;        // 与冷启动 currentPhase=NIGHT 一致；时段引擎会更新
 Phase currentPhase = PHASE_NIGHT;   // 冷启动先按夜间，NTP 成功后再切
 Palette oldPalette;
 unsigned long phaseChangedAt = 0;
@@ -543,6 +539,28 @@ int iconIndexOf(const String &id) {
   return -1;
 }
 
+// 图标位图是深色底合成的；画到奶油/夜间贴纸上时把底色调成透明
+void drawIconBitmap(int x, int y, int idx) {
+  const uint16_t *src = (const uint16_t *)HABIT_ICON_PIX[idx];
+  const int bw = (HABIT_ICON_W + 7) / 8;
+  uint8_t mask[bw * HABIT_ICON_H];
+  for (int yy = 0; yy < HABIT_ICON_H; yy++) {
+    for (int xx = 0; xx < bw; xx++) {
+      uint8_t b = 0;
+      for (int k = 0; k < 8; k++) {
+        int px = xx * 8 + k;
+        b <<= 1;
+        if (px < HABIT_ICON_W &&
+            icon_pixel_opaque(pgm_read_word(&src[yy * HABIT_ICON_W + px]))) {
+          b |= 1;
+        }
+      }
+      mask[yy * bw + xx] = b;
+    }
+  }
+  ui->draw16bitRGBBitmapWithMask(x, y, src, mask, HABIT_ICON_W, HABIT_ICON_H);
+}
+
 // 奶油贴纸：图标 + 已完成右上角小星星（不再画大双圈）
 void drawHabitIcon(int i, const Palette &p) {
   if (i < 0 || i >= habCount) return;
@@ -557,17 +575,16 @@ void drawHabitIcon(int i, const Palette &p) {
   if (size < 1) size = 1;
   if (idx >= 0) {
     if (size >= HABIT_ICON_W) {
-      ui->draw16bitRGBBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2,
-                             (const uint16_t *)HABIT_ICON_PIX[idx],
-                             HABIT_ICON_W, HABIT_ICON_H);
+      drawIconBitmap(cx - HABIT_ICON_W / 2, cy - HABIT_ICON_H / 2, idx);
     } else {
-      // 最近邻缩放：240 板上把 40x40 图标缩进更小的贴纸
+      // 最近邻缩放：240 板上把 40x40 图标缩进更小的贴纸；深色底跳过
       const uint8_t *src = (const uint8_t *)HABIT_ICON_PIX[idx];
       for (int y = 0; y < size; y++) {
         int sy = y * HABIT_ICON_H / size;
         for (int x = 0; x < size; x++) {
           int sx = x * HABIT_ICON_W / size;
           uint16_t c = pgm_read_word(src + (sy * HABIT_ICON_W + sx) * 2);
+          if (!icon_pixel_opaque(c)) continue;
           ui->drawPixel(cx - size / 2 + x, cy - size / 2 + y, c);
         }
       }
@@ -595,6 +612,7 @@ void animateStickerBounce(int idx) {
   bounceIdx = idx;
   for (int f = 0; f < 4; f++) {
     bounceDy = offs[f];
+    audioLoop();                        // 动画期间不能饿着 I2S
     render();
     delay(40);
   }
@@ -605,10 +623,12 @@ void animateStickerBounce(int idx) {
 
 void animateStarFlight(int fromX, int fromY, int toX, int toY) {
   Palette p = palette_for_phase(currentPhase);
-  for (int f = 0; f < 30; f++) {
-    float t = f / 29.0f;
+  int frames = animation_frames(15, nightMode);   // 约 0.7 秒，夜间减半
+  for (int f = 0; f < frames; f++) {
+    float t = (frames > 1) ? (float)f / (frames - 1) : 1.0f;
     int x = fromX + (int)((toX - fromX) * t);
     int y = fromY + (int)((toY - fromY) * t) - (int)(sinf(t * PI) * S(20));
+    audioLoop();
     render();
     drawStar(x, y, S(8), true, false, p.accent, p.weekFuture);
     if (canvasOk) canvas->flush();
@@ -676,11 +696,14 @@ void playCelebration(int kind) {
 
   int savedExpr = expr;
   expr = EXPR_HAPPY;
-  for (int f = 0; f < 42; f++) {
+  int frames = animation_frames(42, nightMode);   // 夜间减半
+  int speedMul = nightMode ? 2 : 1;
+  for (int f = 0; f < frames; f++) {
+    audioLoop();
     drawBackground(cp);
     drawSun(cp);
     for (int i = 0; i < N; i++) {
-      int y = py[i] + f * spd[i];
+      int y = py[i] + f * spd[i] * speedMul;
       int x = px[i] + (int)(sin((f + i * 7) / 6.0f) * K(6));
       if (y < 0 || y > h) continue;
       if (kind == 0) {
@@ -690,9 +713,7 @@ void playCelebration(int kind) {
       } else if (kind == 2) {
         int idx = iconPool[i % 4];
         if (y > K(HABIT_ICON_H / 2) && y < h - K(HABIT_ICON_H / 2)) {
-          ui->draw16bitRGBBitmap(x - HABIT_ICON_W / 2, y - HABIT_ICON_H / 2,
-                                 (const uint16_t *)HABIT_ICON_PIX[idx],
-                                 HABIT_ICON_W, HABIT_ICON_H);
+          drawIconBitmap(x - HABIT_ICON_W / 2, y - HABIT_ICON_H / 2, idx);
         }
       } else {
         int s2 = K(6);
@@ -721,13 +742,14 @@ void render() {
 
   drawHabitArc(p);
 
-  // 计时进度条
+  // 计时进度条：放在太阳与习惯弧之间，不能压住贴纸
   if (runIdx >= 0 && runDur > 0) {
-    int w = K(160), x0 = SCREEN_W / 2 - w / 2, yb = K(205), hb = K(10);
-    ui->drawRect(x0, yb, w, hb, p.weekFuture);
+    Rect bar = progress_bar_rect(SCREEN_W, SCREEN_H);
+    ui->drawRect(bar.x, bar.y, bar.w, bar.h, p.weekFuture);
     unsigned long e = millis() - runStart;
-    int f = (int)((e >= runDur) ? w - 2 : (e * (unsigned long)(w - 2)) / runDur);
-    if (f > 0) ui->fillRect(x0 + 1, yb + 1, f, hb - 2, p.weekDone);
+    int f = (int)((e >= runDur) ? bar.w - 2
+                               : (e * (unsigned long)(bar.w - 2)) / runDur);
+    if (f > 0) ui->fillRect(bar.x + 1, bar.y + 1, f, bar.h - 2, p.weekDone);
   }
 
   if (banner.length()) {
@@ -1159,7 +1181,7 @@ void completeHabit(int idx) {
 
   if (hab[idx].done) {
     setBanner("ALREADY DONE");
-    say(VOICE_THANKS);
+    say(VOICE_ALREADY_DONE);
     return;
   }
   hab[idx].done = true;
@@ -1694,7 +1716,7 @@ void loop() {
 #endif
 
   if (cardMode) {
-    if (a == 1) {                       // A：退出卡片
+    if (a == 1 || a == 2) {             // A / 长按：退出卡片
       cardMode = false; cardPending = false;
       needRedraw = true;
     } else if (b == 1) {                // B：翻页

@@ -176,10 +176,37 @@ bool circle_hit(int x, int y, int cx, int cy, int r) {
 
 int habit_hit_test(int x, int y, const int px[4], const int py[4], int count,
                    int radius) {
+  // 3-4 件时命中圆会重叠：选最近的中心，避免点到相邻习惯
+  int best = -1;
+  long bestD = 0;
+  long r2 = (long)radius * radius;
   for (int i = 0; i < count && i < 4; i++) {
-    if (circle_hit(x, y, px[i], py[i], radius)) return i;
+    long dx = x - px[i];
+    long dy = y - py[i];
+    long d2 = dx * dx + dy * dy;
+    if (d2 <= r2 && (best < 0 || d2 < bestD)) {
+      best = i;
+      bestD = d2;
+    }
   }
-  return -1;
+  return best;
+}
+
+bool icon_pixel_opaque(uint16_t c) { return c != 0x10C4; }
+
+Rect progress_bar_rect(int screenW, int screenH) {
+  Rect r;
+  r.w = 160 * screenW / 360;
+  r.h = 10 * screenW / 360;
+  r.x = screenW / 2 - r.w / 2;
+  r.y = 232 * screenH / 360;   // 太阳下方、习惯弧上方
+  return r;
+}
+
+int animation_frames(int base, bool night) {
+  if (base < 1) base = 1;
+  int n = night ? base / 2 : base;
+  return n < 1 ? 1 : n;
 }
 
 int touch_map_axis(int raw, int screenSize, bool mirror) {

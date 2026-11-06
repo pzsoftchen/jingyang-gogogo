@@ -149,10 +149,45 @@ int main() {
   CHECK_EQ(touch_map_axis(400, 360, false), 359);
   CHECK_EQ(touch_map_axis(0, 240, true), 239);
 
-  // 命中测试：中心命中、半径外不命中
+  // 命中测试：中心命中、半径外不命中；重叠时选最近的中心
   int px[1] = {180}, py[1] = {310};
   CHECK_EQ(habit_hit_test(180, 310, px, py, 1, 30), 0);
   CHECK_EQ(habit_hit_test(180, 250, px, py, 1, 30), -1);
+  int ox[2] = {100, 140}, oy[2] = {100, 100};
+  CHECK_EQ(habit_hit_test(130, 100, ox, oy, 2, 40), 1);
+
+  // 图标背景色应视为透明
+  CHECK(!icon_pixel_opaque(0x10C4));
+  CHECK(icon_pixel_opaque(0xFFFF));
+  CHECK(icon_pixel_opaque(0x10C5));
+
+  // 进度条不能压住底部贴纸（240/360、1-4 件）
+  for (int size : {240, 360}) {
+    Rect bar = progress_bar_rect(size, size);
+    CHECK(bar.y + bar.h < size);
+    int bx[4], by[4];
+    int R = size * 140 / 360;
+    int sr = habit_sticker_radius(size);
+    for (int count = 1; count <= 4; count++) {
+      habit_arc_positions(count, size / 2, size * 17 / 36, R, bx, by);
+      for (int i = 0; i < count; i++) {
+        int qx = bx[i], qy = by[i];
+        if (qx < bar.x) qx = bar.x;
+        else if (qx > bar.x + bar.w) qx = bar.x + bar.w;
+        if (qy < bar.y) qy = bar.y;
+        else if (qy > bar.y + bar.h) qy = bar.y + bar.h;
+        long d2 = (long)(qx - bx[i]) * (qx - bx[i]) +
+                  (long)(qy - by[i]) * (qy - by[i]);
+        CHECK(d2 >= (long)sr * sr);
+      }
+    }
+  }
+
+  // 夜间动画帧数减半，至少 1 帧
+  CHECK_EQ(animation_frames(30, false), 30);
+  CHECK_EQ(animation_frames(30, true), 15);
+  CHECK_EQ(animation_frames(42, true), 21);
+  CHECK_EQ(animation_frames(1, true), 1);
 
   // 太阳光芒：8 条、都在身外、夜间更短
   int rx[8], ry[8], dx[8], dy[8];
