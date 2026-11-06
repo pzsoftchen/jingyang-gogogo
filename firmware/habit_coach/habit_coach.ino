@@ -1185,6 +1185,7 @@ void tca9554Init() {
 #endif
 bool touchHeld = false, touchLongFired = false;
 unsigned long touchDownAt = 0;
+int touchLastX = 0, touchLastY = 0;
 
 void touchInit() {
 #if !TP_ON_SYS_BUS
@@ -1198,29 +1199,84 @@ void touchInit() {
   Serial.printf("[touch] CST816 %s\n", touchReady ? "OK" : "未找到");
 }
 
-int touchGesture() {
-  if (!touchReady) return 0;
-  TPWIRE.beginTransmission(CST816_ADDR);
-  TPWIRE.write(0x01);
-  TPWIRE.endTransmission(false);
-  TPWIRE.requestFrom((int)CST816_ADDR, 1);
-  return TPWIRE.available() ? TPWIRE.read() : 0;
+// CST816 标准寄存器：0x01 Gesture / 0x02 FingerNum / 0x03-0x06 X/Y
+#define CST816_REG_GESTURE 0x01
+#define CST816_REG_FINGERS 0x02
+#define CST816_REG_XH      0x03
+#define CST816_REG_XL      0x04
+#define CST816_REG_YH      0x05
+#define CST816_REG_YL      0x06
+
+// 真机方向不对时只改这三行：交换 XY / 镜像 X / 镜像 Y
+#define TP_SWAP_XY  0
+#define TP_MIRROR_X 0
+#define TP_MIRROR_Y 0
+
+int mapTouchX(int rawX, int rawY) {
+#if TP_SWAP_XY
+  int v = rawY;
+#else
+  int v = rawX;
+#endif
+  return touch_map_axis(v, SCREEN_W, TP_MIRROR_X);
 }
 
-// 轻点 / 长按 → 映射成和按键一样的事件（0 无 / 1 短 / 2 长）
-int readTouch() {
-  int g = touchGesture();
-  bool now = (g != 0);
-  if (now && !touchHeld) {
-    touchHeld = true;
-    touchDownAt = millis();
-    touchLongFired = false;
-  } else if (now && !touchLongFired && millis() - touchDownAt > 900) {
-    touchLongFired = true;
-    return 2;
-  } else if (!now && touchHeld) {
+int mapTouchY(int rawX, int rawY) {
+#if TP_SWAP_XY
+  int v = rawX;
+#else
+  int v = rawY;
+#endif
+  return touch_map_axis(v, SCREEN_H, TP_MIRROR_Y);
+}
+
+bool touchReadRaw(uint8_t buf[6]) {
+  if (!touchReady) return false;
+  TPWIRE.beginTransmission(CST816_ADDR);
+  TPWIRE.write(CST816_REG_GESTURE);
+  if (TPWIRE.endTransmission(false) != 0) return false;
+  if (TPWIRE.requestFrom((int)CST816_ADDR, 6) != 6) return false;
+  for (int i = 0; i < 6; i++) buf[i] = TPWIRE.read();
+  return true;
+}
+
+bool touchReadPoint(int &x, int &y) {
+  uint8_t b[6];
+  if (!touchReadRaw(b) || b[1] == 0) return false;
+  int rawX = ((b[2] & 0x0F) << 8) | b[3];
+  int rawY = ((b[4] & 0x0F) << 8) | b[5];
+  x = mapTouchX(rawX, rawY);
+  y = mapTouchY(rawX, rawY);
+  return true;
+}
+
+// 轻点 / 长按 → 0 无 / 1 轻点（带坐标）/ 2 长按（带坐标）
+int readTouchEvent(int &x, int &y) {
+  uint8_t b[6];
+  if (!touchReadRaw(b)) return 0;
+  bool now = (b[1] > 0);
+  if (now) {
+    int rawX = ((b[2] & 0x0F) << 8) | b[3];
+    int rawY = ((b[4] & 0x0F) << 8) | b[5];
+    touchLastX = mapTouchX(rawX, rawY);
+    touchLastY = mapTouchY(rawX, rawY);
+    if (!touchHeld) {
+      touchHeld = true;
+      touchDownAt = millis();
+      touchLongFired = false;
+    } else if (!touchLongFired && millis() - touchDownAt > 900) {
+      touchLongFired = true;
+      x = touchLastX; y = touchLastY;
+      Serial.printf("[touch] long %d,%d\n", x, y);
+      return 2;
+    }
+  } else if (touchHeld) {
     touchHeld = false;
-    if (!touchLongFired) return 1;
+    if (!touchLongFired) {
+      x = touchLastX; y = touchLastY;
+      Serial.printf("[touch] tap %d,%d\n", x, y);
+      return 1;
+    }
   }
   return 0;
 }
@@ -1288,6 +1344,19 @@ void handleSerial() {
     }
     else if (c == '1') { say(1); } else if (c == '2') { say(2); }
     else if (c == '3') { say(3); } else if (c == '8') { say(8); }
+    else if (c == 'T') {                    // 触摸原始数据（核对坐标轴/寄存器）
+#if USE_TOUCH
+      uint8_t b[6];
+      if (touchReadRaw(b)) {
+        Serial.printf("[touch] raw %02X %02X %02X %02X %02X %02X\n",
+                      b[0], b[1], b[2], b[3], b[4], b[5]);
+      } else {
+        Serial.println("[touch] no data");
+      }
+#else
+      Serial.println("[touch] not enabled");
+#endif
+    }
     else if (c == 'p') {                    // 四幕自检：MORNING→DAY→EVENING→NIGHT
       currentPhase = (Phase)(((int)currentPhase + 1) & 3);
       phaseChangedAt = millis();
@@ -1480,7 +1549,9 @@ void loop() {
 
 #if USE_TOUCH
   {
-    int t = readTouch();
+    int tx = 0, ty = 0;
+    int t = readTouchEvent(tx, ty);
+    (void)tx; (void)ty;                 // Task 7 用坐标做贴纸/太阳命中测试
     if (t == 2) {                       // 长按
       if (cardMode) a = 2; else b = 2;
     } else if (t == 1) {                // 轻点

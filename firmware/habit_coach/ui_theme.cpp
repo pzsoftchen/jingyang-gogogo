@@ -177,6 +177,12 @@ int habit_hit_test(int x, int y, const int px[4], const int py[4], int count,
   return -1;
 }
 
+int touch_map_axis(int raw, int screenSize, bool mirror) {
+  if (raw < 0) raw = 0;
+  if (raw >= screenSize) raw = screenSize - 1;
+  return mirror ? screenSize - 1 - raw : raw;
+}
+
 void sun_ray_endpoints(Phase p, int cx, int cy, int bodyR, int rayR, int outX[8],
                        int outY[8]) {
   int idx = (int)p;

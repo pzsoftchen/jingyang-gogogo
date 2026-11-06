@@ -47,6 +47,7 @@ WeekDotState week_dot_state(int i, bool calValid, const bool cal[7], int weekday
 int week_dot_radius(WeekDotState s, int base);
 void habit_arc_positions(int count, int cx, int cy, int radius, int outX[4], int outY[4]);
 int habit_hit_test(int x, int y, const int px[4], const int py[4], int count, int radius);
+int touch_map_axis(int raw, int screenSize, bool mirror);
 void sun_ray_endpoints(Phase p, int cx, int cy, int bodyR, int rayR, int outX[8], int outY[8]);
 uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t);
 Palette palette_lerp(const Palette &a, const Palette &b, uint8_t t);

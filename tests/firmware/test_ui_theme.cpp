@@ -128,6 +128,13 @@ int main() {
   habit_arc_positions(4, 180, 180, 140, hx, hy);
   CHECK(hx[0] < hx[1] && hx[1] < hx[2] && hx[2] < hx[3]);
 
+  // 触摸坐标映射：夹紧 + 可选镜像
+  CHECK_EQ(touch_map_axis(100, 360, false), 100);
+  CHECK_EQ(touch_map_axis(100, 360, true), 259);
+  CHECK_EQ(touch_map_axis(-5, 360, false), 0);
+  CHECK_EQ(touch_map_axis(400, 360, false), 359);
+  CHECK_EQ(touch_map_axis(0, 240, true), 239);
+
   // 命中测试：中心命中、半径外不命中
   int px[1] = {180}, py[1] = {310};
   CHECK_EQ(habit_hit_test(180, 310, px, py, 1, 30), 0);
