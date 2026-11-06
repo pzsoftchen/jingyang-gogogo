@@ -19,6 +19,16 @@ struct Palette {
   uint8_t  brightness;   // 0-100
 };
 
+struct SunGeom {
+  int cx, cy;              // 太阳中心
+  int bodyR, rayR;         // 本体半径 / 光芒外缘
+  int eyeDx, eyeDy, eyeR;  // 眼睛相对中心
+  int mouthY;              // 嘴相对中心的纵向偏移
+  int cheekDx, cheekDy, cheekR;
+};
+
+SunGeom sun_geometry(int screenW, int screenH);
+
 constexpr uint16_t rgb565(uint32_t rgb) {
   return (uint16_t)(((((rgb >> 16) & 0xFF) >> 3) << 11) |
                     ((((rgb >> 8) & 0xFF) >> 2) << 5) |

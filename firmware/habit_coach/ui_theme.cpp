@@ -81,6 +81,22 @@ int volume_steps(int percent, int maxSteps, bool night) {
   return (percent * maxSteps + 50) / 100;
 }
 
+SunGeom sun_geometry(int screenW, int screenH) {
+  SunGeom g;
+  g.cx = screenW / 2;
+  g.cy = screenH * 17 / 36;
+  g.bodyR = 52 * screenW / 360;
+  g.rayR = 90 * screenW / 360;
+  g.eyeDx = 20 * screenW / 360;
+  g.eyeDy = -8 * screenW / 360;
+  g.eyeR = 7 * screenW / 360;
+  g.mouthY = 20 * screenW / 360;
+  g.cheekDx = 30 * screenW / 360;
+  g.cheekDy = 12 * screenW / 360;
+  g.cheekR = 9 * screenW / 360;
+  return g;
+}
+
 int backlight_duty(int percent) {
   if (percent < 0) percent = 0;
   if (percent > 100) percent = 100;

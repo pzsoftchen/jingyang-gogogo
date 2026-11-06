@@ -85,9 +85,11 @@
   #define SCREEN_H     240
 #endif
 
-// 布局缩放：所有绘图坐标以 240 为设计基准，乘这个系数适配 360
+// 布局缩放：旧绘图坐标以 240 为设计基准，乘这个系数适配 360
 #define UI_K ((float)SCREEN_W / 240.0f)
 #define K(v) ((int)((v) * UI_K))
+// 新主题（小豆豆的一天）以 360 设计稿为基准
+#define S(v) ((int)((v) * SCREEN_W / 360.0f))
 
 // ======================= 引脚 =======================
 #if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
@@ -227,15 +229,11 @@ int seqN = 0, seqIdx = 0;
 enum { EXPR_IDLE = 0, EXPR_HAPPY, EXPR_BLINK, EXPR_TALK, EXPR_SURPRISED,
        EXPR_WINK, EXPR_SLEEPY, EXPR_CURIOUS };
 
-// ======================= 调色板 =======================
-#define C_BG       0x0861   // 深夜蓝黑
-#define C_FACE     0xFE60   // 暖黄
+// ======================= 旧庆祝动画调色板 =======================
+// 主界面/太阳已改用 ui_theme 的四幕 Palette；这里只保留庆祝动画还需要的颜色。
 #define C_INK      0x18E3
-#define C_EXPR     0xFFE0   // 表情线条：亮黄，保证在深色背景上可见
-#define C_PUPIL    0x0861   // 眼睛高光/瞳孔：与背景同色
 #define C_STAR_ON  0xFFE0
 #define C_STAR_OFF 0x2945
-#define C_TXT      0xC618
 #define C_ACCENT   0xFD20
 
 // ======================= 语音 =======================
@@ -393,81 +391,96 @@ void startSeq(int idx) {
 
 void cancelSeq() { seqN = 0; seqIdx = 0; }
 
-// ======================= 绘制 =======================
-// 设计基准是 240×240，所有坐标乘 K() 适配 360×360
-void drawEyes(int mode) {
-  int lx = K(88), rx = K(152), ey = K(92);
-  int e = K(14), hi = K(4);
-  // 眨眼：一只闭一只圆
+// ======================= 绘制：小豆豆（太阳角色） =======================
+// 五官颜色必须与太阳本体有对比：深棕五官 + 太阳色高光
+void drawSunFace(int mode, const Palette &p, const SunGeom &g) {
+  int lx = g.cx - g.eyeDx, rx = g.cx + g.eyeDx;
+  int ey = g.cy + g.eyeDy;
+  int e = g.eyeR;
+  int hi = (e / 3 > 1) ? e / 3 : 1;
+
   if (mode == EXPR_WINK) {
-    ui->drawLine(lx - e, ey, lx + e, ey, C_EXPR);
-    ui->fillCircle(rx, ey, K(12), C_EXPR);
-    ui->fillCircle(rx + hi, ey - hi, hi, C_PUPIL);
-    return;
+    ui->drawLine(lx - e, ey, lx + e, ey, p.face);
+    ui->fillCircle(rx, ey, e, p.face);
+    ui->fillCircle(rx + hi, ey - hi, hi, p.sun);
+  } else if (mode == EXPR_CURIOUS) {
+    ui->fillCircle(lx, ey, e + 2, p.face);
+    ui->fillCircle(rx, ey, e - 2, p.face);
+    ui->fillCircle(lx + hi, ey - hi, hi, p.sun);
+    ui->fillCircle(rx + 1, ey - 1, hi, p.sun);
+  } else if (mode == EXPR_SURPRISED) {
+    ui->fillCircle(lx, ey, e + 3, p.face);
+    ui->fillCircle(rx, ey, e + 3, p.face);
+    ui->fillCircle(lx + hi, ey - hi * 2, hi, p.sun);
+    ui->fillCircle(rx + hi, ey - hi * 2, hi, p.sun);
+  } else if (mode == 2 || mode == EXPR_SLEEPY) {
+    ui->drawLine(lx - e, ey, lx + e, ey, p.face);
+    ui->drawLine(rx - e, ey, rx + e, ey, p.face);
+  } else if (mode == 1 || mode == EXPR_HAPPY) {
+    ui->drawLine(lx - e, ey + 2, lx, ey - 3, p.face);
+    ui->drawLine(lx, ey - 3, lx + e, ey + 2, p.face);
+    ui->drawLine(rx - e, ey + 2, rx, ey - 3, p.face);
+    ui->drawLine(rx, ey - 3, rx + e, ey + 2, p.face);
+  } else {
+    ui->fillCircle(lx, ey, e, p.face);
+    ui->fillCircle(rx, ey, e, p.face);
+    ui->fillCircle(lx + hi, ey - hi, hi, p.sun);
+    ui->fillCircle(rx + hi, ey - hi, hi, p.sun);
   }
-  // 好奇：一大一小
-  if (mode == EXPR_CURIOUS) {
-    ui->fillCircle(lx, ey, K(14), C_EXPR);
-    ui->fillCircle(rx, ey, K(8), C_EXPR);
-    ui->fillCircle(lx + hi, ey - hi, hi, C_PUPIL);
-    ui->fillCircle(rx + K(2), ey - K(2), K(3), C_PUPIL);
-    return;
-  }
-  // 惊讶：更大的圆眼 + 高光偏上
+
+  int cx = g.cx, my = g.cy + g.mouthY;
   if (mode == EXPR_SURPRISED) {
-    ui->fillCircle(lx, ey, K(15), C_EXPR);
-    ui->fillCircle(rx, ey, K(15), C_EXPR);
-    ui->fillCircle(lx + hi, ey - K(6), hi, C_PUPIL);
-    ui->fillCircle(rx + hi, ey - K(6), hi, C_PUPIL);
-    return;
+    ui->fillCircle(cx, my, e, p.face);
+  } else if (mode == EXPR_CURIOUS) {
+    ui->drawLine(cx - e, my + 2, cx + 1, my - 1, p.face);
+    ui->drawLine(cx + 1, my - 1, cx + e + 1, my + 1, p.face);
+  } else if (mode == EXPR_SLEEPY) {
+    ui->drawLine(cx - e, my, cx, my - 3, p.face);
+    ui->drawLine(cx, my - 3, cx + e, my, p.face);
+    ui->setTextColor(p.accent);
+    ui->setTextSize(1);
+    ui->setCursor(cx + g.cheekDx, my - g.cheekDy);
+    ui->print("z z");
+  } else if (mode == 1 || mode == EXPR_HAPPY) {
+    ui->fillCircle(cx, my, e + 4, p.face);
+    ui->fillCircle(cx, my - 3, e + 4, p.sun);
+  } else if (mode == 3) {
+    ui->fillCircle(cx, my, e - 1, p.face);
+  } else {
+    ui->drawLine(cx - e - 2, my, cx - 2, my + 3, p.face);
+    ui->drawLine(cx - 2, my + 3, cx + 2, my + 3, p.face);
+    ui->drawLine(cx + 2, my + 3, cx + e + 2, my, p.face);
   }
-  if (mode == 2 || mode == EXPR_SLEEPY) {
-    ui->drawLine(lx - e, ey, lx + e, ey, C_EXPR);
-    ui->drawLine(rx - e, ey, rx + e, ey, C_EXPR);
-    return;
-  }
-  if (mode == 1 || mode == EXPR_HAPPY) {
-    ui->drawLine(lx - e, ey + K(6), lx, ey - K(8), C_EXPR);
-    ui->drawLine(lx, ey - K(8), lx + e, ey + K(6), C_EXPR);
-    ui->drawLine(rx - e, ey + K(6), rx, ey - K(8), C_EXPR);
-    ui->drawLine(rx, ey - K(8), rx + e, ey + K(6), C_EXPR);
-    return;
-  }
-  ui->fillCircle(lx, ey, K(12), C_EXPR);
-  ui->fillCircle(rx, ey, K(12), C_EXPR);
-  ui->fillCircle(lx + hi, ey - hi, hi, C_PUPIL);
-  ui->fillCircle(rx + hi, ey - hi, hi, C_PUPIL);
 }
 
-void drawMouth(int mode) {
-  int cx = SCREEN_W / 2, my = K(132);
-  // 惊讶：小圆嘴
-  if (mode == EXPR_SURPRISED) { ui->fillCircle(cx, my + K(2), K(9), C_EXPR); return; }
-  // 好奇：歪嘴
-  if (mode == EXPR_CURIOUS) {
-    ui->drawLine(cx - K(10), my + K(4), cx + K(2), my - K(2), C_EXPR);
-    ui->drawLine(cx + K(2), my - K(2), cx + K(13), my + K(3), C_EXPR);
-    return;
+void drawSun(const Palette &p) {
+  SunGeom g = sun_geometry(SCREEN_W, SCREEN_H);
+  int rx[8], ry[8];
+  sun_ray_endpoints(currentPhase, g.cx, g.cy, g.bodyR, g.rayR, rx, ry);
+  int startR = g.bodyR - S(4);
+  for (int i = 0; i < 8; i++) {
+    float dx = (float)(rx[i] - g.cx), dy = (float)(ry[i] - g.cy);
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.0f) continue;
+    int sx = g.cx + (int)(dx * startR / len);
+    int sy = g.cy + (int)(dy * startR / len);
+    ui->drawLine(sx, sy, rx[i], ry[i], p.ray);
+    ui->fillCircle(rx[i], ry[i], S(3), p.ray);
   }
-  // 困：小弧 + zz
-  if (mode == EXPR_SLEEPY) {
-    ui->drawLine(cx - K(8), my + K(3), cx, my - K(2), C_EXPR);
-    ui->drawLine(cx, my - K(2), cx + K(8), my + K(3), C_EXPR);
-    ui->setTextColor(C_ACCENT);
-    ui->setTextSize(1);
-    ui->setCursor(cx + K(28), my - K(26));
-    ui->print("z z");
-    return;
+  ui->fillCircle(g.cx, g.cy, g.bodyR, p.sun);
+  ui->fillCircle(g.cx - g.cheekDx, g.cy + g.cheekDy, g.cheekR, p.cheek);
+  ui->fillCircle(g.cx + g.cheekDx, g.cy + g.cheekDy, g.cheekR, p.cheek);
+  drawSunFace(expr, p, g);
+}
+
+void drawBackground(const Palette &p) {
+  const int bands = 24;
+  for (int i = 0; i < bands; i++) {
+    int y0 = SCREEN_H * i / bands;
+    int y1 = SCREEN_H * (i + 1) / bands;
+    uint8_t t = (uint8_t)(i * 255 / (bands - 1));
+    ui->fillRect(0, y0, SCREEN_W, y1 - y0, lerp565(p.bgTop, p.bgBottom, t));
   }
-  if (mode == 1 || mode == EXPR_HAPPY) {
-    ui->fillCircle(cx, my, K(20), C_EXPR);
-    ui->fillCircle(cx, my - K(8), K(20), C_PUPIL);
-    return;
-  }
-  if (mode == 3) { ui->fillCircle(cx, my + K(2), K(8), C_EXPR); return; }
-  ui->drawLine(cx - K(16), my, cx - K(6), my + K(7), C_EXPR);
-  ui->drawLine(cx - K(6), my + K(7), cx + K(6), my + K(7), C_EXPR);
-  ui->drawLine(cx + K(6), my + K(7), cx + K(16), my, C_EXPR);
 }
 
 void drawStar(int cx, int cy, int r, bool filled, bool sel) {
@@ -553,10 +566,12 @@ void playCelebration(int kind) {
   int iconPool[4];
   for (int i = 0; i < 4; i++) iconPool[i] = random(0, HABIT_ICON_COUNT);
 
+  int savedExpr = expr;
+  expr = EXPR_HAPPY;
+  Palette cp = palette_for_phase(currentPhase);
   for (int f = 0; f < 42; f++) {
-    ui->fillScreen(C_BG);
-    drawEyes(EXPR_HAPPY);
-    drawMouth(EXPR_HAPPY);
+    drawBackground(cp);
+    drawSun(cp);
     for (int i = 0; i < N; i++) {
       int y = py[i] + f * spd[i];
       int x = px[i] + (int)(sin((f + i * 7) / 6.0f) * K(6));
@@ -580,26 +595,27 @@ void playCelebration(int kind) {
     if (canvasOk) canvas->flush();
     delay(30);
   }
+  expr = savedExpr;
   needRedraw = true;
 }
 
 void render() {
   if (cardMode) { renderCard(); return; }
-  ui->fillScreen(C_BG);
+  Palette p = palette_for_phase(currentPhase);
+  drawBackground(p);
 
-  // 顶部：本周 7 个格子
+  // 顶部：本周 7 个格子（Task 5 换成缓弧）
   int dw = K(24), dx0 = SCREEN_W / 2 - 3 * dw, topY = K(34), dotR = K(9);
   for (int i = 0; i < 7; i++) {
     int x = dx0 + i * dw;
-    if (weekDone[i]) ui->fillCircle(x, topY, dotR, C_STAR_ON);
-    else             ui->drawCircle(x, topY, dotR, C_STAR_OFF);
+    if (weekDone[i]) ui->fillCircle(x, topY, dotR, p.weekDone);
+    else             ui->drawCircle(x, topY, dotR, p.weekFuture);
   }
   ui->fillCircle(K(24), topY, K(4), wifiOk ? 0x07E0 : 0x4208);
 
-  drawEyes(expr);
-  drawMouth(expr);
+  drawSun(p);
 
-  // 今天要做的事：每个习惯一个 emoji 图标
+  // 今天要做的事：每个习惯一个 emoji 图标（Task 7 换成下弧）
   if (habCount > 0) {
     int usable = SCREEN_W - 2 * K(34);
     int gap = (habCount > 1) ? (usable / habCount) : 0;
@@ -608,7 +624,7 @@ void render() {
       drawHabitIcon(startX + i * gap, K(176), hab[i].id, hab[i].done, (i == selected));
     }
   } else {
-    ui->setTextColor(C_TXT);
+    ui->setTextColor(p.text);
     ui->setTextSize(2);
     ui->setCursor(K(46), K(172));
     ui->print("SYNCING");
@@ -617,15 +633,15 @@ void render() {
   // 计时进度条
   if (runIdx >= 0 && runDur > 0) {
     int w = K(160), x0 = SCREEN_W / 2 - w / 2, yb = K(205), hb = K(10);
-    ui->drawRect(x0, yb, w, hb, C_STAR_OFF);
+    ui->drawRect(x0, yb, w, hb, p.weekFuture);
     unsigned long e = millis() - runStart;
     int f = (int)((e >= runDur) ? w - 2 : (e * (unsigned long)(w - 2)) / runDur);
-    if (f > 0) ui->fillRect(x0 + 1, yb + 1, f, hb - 2, C_STAR_ON);
+    if (f > 0) ui->fillRect(x0 + 1, yb + 1, f, hb - 2, p.weekDone);
   }
 
   if (banner.length()) {
     ui->setTextSize(1);
-    ui->setTextColor(C_ACCENT);
+    ui->setTextColor(p.accent);
     ui->setCursor(K(14), K(224));
     ui->print(banner);
   }

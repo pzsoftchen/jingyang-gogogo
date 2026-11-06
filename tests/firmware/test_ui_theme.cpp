@@ -1,6 +1,7 @@
 // 主机端测试：只依赖 ui_theme 的纯函数，不需要 Arduino/硬件。
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 
 #include "../../firmware/habit_coach/ui_theme.h"
@@ -144,6 +145,39 @@ int main() {
     CHECK(dDay >= 52 * 52);
     CHECK(dNight < dDay);
   }
+
+  // 阶段名
+  CHECK(std::strcmp(phase_name(PHASE_MORNING), "MORNING") == 0);
+  CHECK(std::strcmp(phase_name(PHASE_DAY), "DAY") == 0);
+  CHECK(std::strcmp(phase_name(PHASE_EVENING), "EVENING") == 0);
+  CHECK(std::strcmp(phase_name(PHASE_NIGHT), "NIGHT") == 0);
+
+  // 晨间上方光芒比下方长
+  sun_ray_endpoints(PHASE_MORNING, 180, 170, 52, 90, rx, ry);
+  {
+    int top = (rx[0] - 180) * (rx[0] - 180) + (ry[0] - 170) * (ry[0] - 170);
+    int bottom = (rx[4] - 180) * (rx[4] - 180) + (ry[4] - 170) * (ry[4] - 170);
+    CHECK(top > bottom);
+  }
+
+  // 太阳几何：360/240 两档，且不越界
+  SunGeom g = sun_geometry(360, 360);
+  CHECK_EQ(g.cx, 180);
+  CHECK_EQ(g.cy, 170);
+  CHECK_EQ(g.bodyR, 52);
+  CHECK_EQ(g.rayR, 90);
+  CHECK_EQ(g.eyeDx, 20);
+  CHECK_EQ(g.eyeDy, -8);
+  CHECK_EQ(g.eyeR, 7);
+  CHECK_EQ(g.mouthY, 20);
+  CHECK(g.cy - g.rayR >= 0 && g.cy + g.bodyR < 360);
+  SunGeom m = sun_geometry(240, 240);
+  CHECK_EQ(m.cx, 120);
+  CHECK_EQ(m.cy, 113);
+  CHECK_EQ(m.bodyR, 34);
+  CHECK_EQ(m.rayR, 60);
+  CHECK(m.cy - m.rayR >= 0 && m.cy + m.bodyR < 240);
+  CHECK(m.bodyR < g.bodyR);
 
   // 颜色插值与调色板插值端点
   CHECK_EQ(lerp565(0x1234, 0xABCD, 0), 0x1234);
