@@ -363,6 +363,16 @@ def now_iso():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def theme_for_time(hour, minute):
+    """06:30–20:00 为白天，其余为夜晚。"""
+    return "day" if (6, 30) <= (hour, minute) < (20, 0) else "night"
+
+
+def theme_now():
+    now = datetime.datetime.now()
+    return theme_for_time(now.hour, now.minute)
+
+
 # ----------------------------- 业务逻辑 -----------------------------
 def get_habits(conn):
     """按一天的时间顺序返回启用中的习惯（设备上的星星也按这个顺序）。"""

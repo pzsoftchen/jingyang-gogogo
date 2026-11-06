@@ -672,3 +672,12 @@ class StageTests(Base):
         limits = server.push_limits(self.conn)
         self.assertEqual(limits["newchar"] + limits["surprise"], 3)
 
+
+class ThemeTests(Base):
+    def test_theme_boundaries(self):
+        self.assertEqual(server.theme_for_time(6, 29), "night")
+        self.assertEqual(server.theme_for_time(6, 30), "day")
+        self.assertEqual(server.theme_for_time(19, 59), "day")
+        self.assertEqual(server.theme_for_time(20, 0), "night")
+        self.assertEqual(server.theme_for_time(0, 0), "night")
+
