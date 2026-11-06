@@ -96,6 +96,14 @@ int main() {
   CHECK(!parse_volume_pct("", vp));
   CHECK(!parse_volume_pct("60x", vp));
 
+  // 背光占空比（8 位）：夹紧 0-100，20% = 51
+  CHECK_EQ(backlight_duty(0), 0);
+  CHECK_EQ(backlight_duty(20), 51);
+  CHECK_EQ(backlight_duty(50), 127);
+  CHECK_EQ(backlight_duty(100), 255);
+  CHECK_EQ(backlight_duty(-5), 0);
+  CHECK_EQ(backlight_duty(150), 255);
+
   // 弧线坐标：240 与 360 都不越界、左右对称、顶部点在正上方
   for (int size : {240, 360}) {
     int cx = size / 2, cy = size / 2, R = size * 150 / 360;

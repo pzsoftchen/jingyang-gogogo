@@ -29,6 +29,7 @@ Phase phase_for_time(int hour, int minute);
 const char *phase_name(Phase p);
 const Palette &palette_for_phase(Phase p);
 int volume_steps(int percent, int maxSteps, bool night);
+int backlight_duty(int percent);
 int parse_bits7(const char *csv, bool out[7]);
 bool parse_volume_pct(const char *s, int &out);
 void week_dot_positions(int cx, int cy, int radius, int outX[7], int outY[7]);

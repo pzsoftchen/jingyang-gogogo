@@ -81,6 +81,12 @@ int volume_steps(int percent, int maxSteps, bool night) {
   return (percent * maxSteps + 50) / 100;
 }
 
+int backlight_duty(int percent) {
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+  return percent * 255 / 100;
+}
+
 int parse_bits7(const char *csv, bool out[7]) {
   if (!csv) return 0;
   int n = 0;

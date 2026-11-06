@@ -259,6 +259,9 @@ bool weekCal[7] = {false, false, false, false, false, false, false};   // 本周
 int  weekday = 0;             // 1=周一 … 7=周日；0=未知
 int  volumePct = -1;          // 家长页音量 0-100；-1=服务器未下发
 bool nightMode = false;       // 由时段引擎更新
+Phase currentPhase = PHASE_NIGHT;   // 冷启动先按夜间，NTP 成功后再切
+unsigned long phaseChangedAt = 0;
+unsigned long lastPhaseCheck = 0;
 int  streak = 0;
 int  protoVer = 1;        // 服务器协议版本（V=2）
 String packVer = "";      // 服务器上的语音包版本（PACK=voice.1）
@@ -1250,6 +1253,16 @@ void handleSerial() {
     }
     else if (c == '1') { say(1); } else if (c == '2') { say(2); }
     else if (c == '3') { say(3); } else if (c == '8') { say(8); }
+    else if (c == 'p') {                    // 四幕自检：MORNING→DAY→EVENING→NIGHT
+      currentPhase = (Phase)(((int)currentPhase + 1) & 3);
+      phaseChangedAt = millis();
+      nightMode = (currentPhase == PHASE_NIGHT);
+      setBacklightPct(palette_for_phase(currentPhase).brightness);
+      applyVolume();
+      needRedraw = true;
+      Serial.printf("[phase] %s brightness=%d\n", phase_name(currentPhase),
+                    palette_for_phase(currentPhase).brightness);
+    }
     else if (c == 'd') {                    // 屏幕自检：红/绿/蓝/白/黑
       const uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000};
       const char *names[] = {"RED", "GREEN", "BLUE", "WHITE", "BLACK"};
@@ -1295,6 +1308,54 @@ void handleSerial() {
   }
 }
 
+// ======================= 背光 / 四幕 =======================
+// core 2.x 的 LEDC 按通道号；通道 1 给背光，通道 0 留给蜂鸣器（240 板）
+void backlightInit() {
+#if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
+  pinMode(LCD_BL, OUTPUT);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(LCD_BL, 5000, 8);
+#else
+  ledcSetup(1, 5000, 8);
+  ledcAttachPin(LCD_BL, 1);
+#endif
+#else
+  pinMode(TFT_BL, OUTPUT);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(TFT_BL, 5000, 8);
+#else
+  ledcSetup(1, 5000, 8);
+  ledcAttachPin(TFT_BL, 1);
+#endif
+#endif
+}
+
+void setBacklightPct(int pct) {
+  int duty = backlight_duty(pct);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  #if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
+  ledcWrite(LCD_BL, duty);
+  #else
+  ledcWrite(TFT_BL, duty);
+  #endif
+#else
+  ledcWrite(1, duty);
+#endif
+}
+
+void updatePhase(bool force) {
+  struct tm t;
+  if (!getLocalTime(&t, 10)) return;     // 没时间：保持当前时段（冷启动=夜间）
+  Phase p = phase_for_time(t.tm_hour, t.tm_min);
+  if (!force && p == currentPhase) return;
+  if (p != currentPhase) phaseChangedAt = millis();
+  currentPhase = p;
+  nightMode = (p == PHASE_NIGHT);
+  setBacklightPct(palette_for_phase(p).brightness);
+  applyVolume();                         // 夜间音量压到 60%
+  needRedraw = true;
+}
+
 // ======================= setup / loop =======================
 void setup() {
   Serial.begin(115200);
@@ -1311,12 +1372,9 @@ void setup() {
 
 #if BOARD == BOARD_WS_1_85 || BOARD == BOARD_WS_1_85C
   tca9554Init();                 // 必须先放 LCD_RST / TP_RST，否则屏不亮
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);
-#else
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
 #endif
+  backlightInit();
+  setBacklightPct(20);           // 冷启动先夜间亮度；NTP 成功后 updatePhase() 切时段
 
   bool gfxOk = gfx->begin(40000000);   // 先降到 40 MHz，排除 QSPI 时序/信号问题
   Serial.printf("[ui] gfx %s\n", gfxOk ? "OK" : "FAIL");
@@ -1352,6 +1410,7 @@ void setup() {
 
   connectWifi();
   if (wifiOk) { syncState(); flushQueue(); }
+  updatePhase(true);
 
   say(VOICE_BOOT);
   happyFor(2500);
@@ -1461,6 +1520,12 @@ void loop() {
     syncState();
     flushQueue();
     needRedraw = true;
+  }
+
+  // 3b. 四幕时段（每 30 秒；无时间时保持当前时段）
+  if (millis() - lastPhaseCheck > 30000) {
+    lastPhaseCheck = millis();
+    updatePhase(false);
   }
 
   // 4. 提醒
