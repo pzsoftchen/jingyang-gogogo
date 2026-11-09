@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="小豆豆的一天 · 夜间标识">
+<title>小豆豆的一天 · 夜间标识</title>
+<g stroke-linecap="round" stroke-linejoin="round">
+<line x1="58" y1="136" x2="34" y2="136" stroke="#E0AE58" stroke-width="8"/>
+<circle cx="34" cy="136" r="4.5" fill="#E0AE58"/>
+<line x1="78.5" y1="185.5" x2="61.53" y2="202.47" stroke="#E0AE58" stroke-width="8"/>
+<circle cx="61.53" cy="202.47" r="4.5" fill="#E0AE58"/>
+<line x1="128" y1="206" x2="128" y2="230" stroke="#E0AE58" stroke-width="8"/>
+<circle cx="128" cy="230" r="4.5" fill="#E0AE58"/>
+<line x1="177.5" y1="185.5" x2="194.47" y2="202.47" stroke="#E0AE58" stroke-width="8"/>
+<circle cx="194.47" cy="202.47" r="4.5" fill="#E0AE58"/>
+<path d="M198 136 C 220 136 232 120 222 102" fill="none" stroke="#E0AE58" stroke-width="8"/>
+<circle cx="222" cy="102" r="4.5" fill="#E0AE58"/>
+<circle cx="128" cy="136" r="62" fill="#F4C56A"/>
+<circle cx="100" cy="153" r="8.5" fill="#FF8FA3" opacity=".85"/><circle cx="156" cy="153" r="8.5" fill="#FF8FA3" opacity=".85"/>
+<circle cx="112" cy="130" r="7" fill="#4A3B32"/><circle cx="144" cy="130" r="7" fill="#4A3B32"/>
+<circle cx="114.5" cy="127.5" r="2.5" fill="#FFF4D6"/><circle cx="146.5" cy="127.5" r="2.5" fill="#FFF4D6"/>
+<path d="M116 152 Q128 164 140 152" fill="none" stroke="#4A3B32" stroke-width="6"/>
+<circle cx="56.66" cy="71.76" r="5" fill="#5BC8B0"/>
+<circle cx="77.13" cy="54.59" r="5" fill="#5BC8B0"/>
+<circle cx="101.54" cy="43.72" r="5" fill="#5BC8B0"/>
+<circle cx="128" cy="40" r="5" fill="#5BC8B0"/>
+<circle cx="154.46" cy="43.72" r="7.5" fill="none" stroke="#FFE8A3" stroke-width="2"/>
+<circle cx="154.46" cy="43.72" r="5" fill="#FF8A65"/>
+<circle cx="178.87" cy="54.59" r="4.5" fill="none" stroke="#6B7A9E" stroke-width="2" stroke-opacity=".5"/>
+<circle cx="199.34" cy="71.76" r="4.5" fill="none" stroke="#6B7A9E" stroke-width="2" stroke-opacity=".5"/>
+</g>
+</svg>
