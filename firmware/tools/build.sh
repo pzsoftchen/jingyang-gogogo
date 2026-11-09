@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 编译两块板（不需要硬件）。用法：./tools/build.sh [devkitc|185|all]
+# 编译三种板型（不需要硬件）。用法：./firmware/tools/build.sh [devkitc|185|185c|all]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SKETCH=firmware/habit_coach
+SKETCH=habit_coach
 # ESP32-S3：16MB Flash + 八线(OPI) PSRAM + Huge APP 分区
 FQBN="esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=huge_app"
 

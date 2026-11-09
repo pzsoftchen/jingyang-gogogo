@@ -6,10 +6,10 @@ cd "$(dirname "$0")/.."
 CXX=${CXX:-clang++}
 $CXX -std=c++17 -Wall -Wextra -O2 \
   -o /tmp/test_ui_theme \
-  tests/firmware/test_ui_theme.cpp firmware/habit_coach/ui_theme.cpp
+  tests/test_ui_theme.cpp habit_coach/ui_theme.cpp
 /tmp/test_ui_theme
 
 $CXX -std=c++17 -Wall -Wextra -O2 \
   -o /tmp/test_habit_sync \
-  tests/firmware/test_habit_sync.cpp
+  tests/test_habit_sync.cpp
 /tmp/test_habit_sync

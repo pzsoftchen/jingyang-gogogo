@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import server  # noqa: E402
@@ -83,7 +84,7 @@ class DefaultsTests(Base):
 
     def test_icons_cover_habits(self):
         """固件图标表必须覆盖全部习惯 id，否则设备上会退回星星。"""
-        path = os.path.join(os.path.dirname(HERE), "firmware", "habit_coach", "habit_icons.h")
+        path = os.path.join(ROOT, "firmware", "habit_coach", "habit_icons.h")
         if not os.path.exists(path):
             self.skipTest("没有生成 habit_icons.h")
         import re
@@ -361,7 +362,7 @@ class FirmwareContractTests(unittest.TestCase):
     """固件没法在主机上跑，至少守住“所有设备 API 请求都带身份”这个契约。"""
 
     def _source(self):
-        path = os.path.join(os.path.dirname(HERE), "firmware", "habit_coach",
+        path = os.path.join(ROOT, "firmware", "habit_coach",
                             "habit_coach.ino")
         with open(path, encoding="utf-8") as f:
             return f.read()
@@ -861,7 +862,7 @@ class VolumeHttpTests(HttpBase, Base):
 
 class FirmwareVolumeTests(unittest.TestCase):
     def test_firmware_parses_vol_and_applies_volume(self):
-        src = open(os.path.join(os.path.dirname(HERE), "firmware", "habit_coach",
+        src = open(os.path.join(ROOT, "firmware", "habit_coach",
                                 "habit_coach.ino"), encoding="utf-8").read()
         self.assertIn('line.startsWith("VOL=")', src)
         self.assertIn("void applyVolume()", src)
@@ -869,7 +870,7 @@ class FirmwareVolumeTests(unittest.TestCase):
         self.assertIn("mp3.volume", src)
 
     def test_firmware_volume_rechecks_night_and_validates(self):
-        root = os.path.dirname(HERE)
+        root = ROOT
         src = open(os.path.join(root, "firmware", "habit_coach",
                                 "habit_coach.ino"), encoding="utf-8").read()
         theme = open(os.path.join(root, "firmware", "habit_coach",

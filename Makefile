@@ -1,21 +1,26 @@
+.PHONY: run seed reset check test build icons voices
+
 run:
-	python3 server.py
+	$(MAKE) -C server run
 
 seed:
-	python3 tools/demo_seed.py
+	$(MAKE) -C server seed
 
 reset:
-	./tools/reset.sh
-
-voices:
-	cd voice-pack && ./make_voice.sh
+	$(MAKE) -C server reset
 
 check:
-	python3 -m py_compile server.py card.py tools/demo_seed.py tests/test_server.py
-	echo "syntax OK"
+	$(MAKE) -C server check
 
-test-firmware:
-	./tools/test_firmware.sh
+test:
+	$(MAKE) -C firmware test
+	$(MAKE) -C server test
 
-test: test-firmware
-	python3 -m unittest discover -s tests -v
+build:
+	$(MAKE) -C firmware build
+
+icons:
+	$(MAKE) -C firmware icons
+
+voices:
+	$(MAKE) -C firmware voices

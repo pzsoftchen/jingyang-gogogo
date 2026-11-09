@@ -4,7 +4,7 @@
  *
  * 准备：
  *   1. 把这个目录里的 secrets.h.example 复制成 secrets.h 并填好
- *   2. 电脑上先跑 python3 server.py
+ *   2. 电脑上先跑 python3 server/server.py
  */
 #include <Arduino.h>
 #include <WiFi.h>
@@ -54,7 +54,7 @@ void loop() {
   if (code != 200) {
     Serial.printf("[3_net] 请求失败 code=%d\n", code);
     Serial.println("  1) SERVER_HOST 是不是电脑的局域网 IP？");
-    Serial.println("  2) server.py 在跑吗？");
+    Serial.println("  2) server/server.py 在跑吗？");
     Serial.println("  3) macOS 防火墙允许 Python 接入吗？");
     http.end();
     delay(5000);

@@ -12,8 +12,8 @@ import datetime
 import os
 import sqlite3
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB = os.path.join(ROOT, "coach.db")
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB = os.environ.get("COACH_DB", os.path.join(ROOT, "coach.db"))
 HABITS = ["brush", "toys"]
 PLAN = {
     0: HABITS,        # 今天
@@ -26,7 +26,7 @@ PLAN = {
 
 def main():
     if not os.path.exists(DB):
-        raise SystemExit("还没有 coach.db，先在项目根目录运行一次 python3 server.py 再跑我。")
+        raise SystemExit("还没有 coach.db，先在项目根目录运行一次 python3 server/server.py 再跑我。")
     conn = sqlite3.connect(DB)
     today = datetime.date.today()
     for back, done in PLAN.items():
@@ -60,7 +60,7 @@ def main():
     conn.commit()
     conn.close()
     print("已写入 5 天演示数据，刷新家长页看看效果。")
-    print("正式使用前：./tools/reset.sh   （清空数据）")
+    print("正式使用前：./server/tools/reset.sh   （清空数据）")
 
 
 if __name__ == "__main__":

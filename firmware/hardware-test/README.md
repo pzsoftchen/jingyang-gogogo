@@ -8,11 +8,11 @@
 | 2 | `2_mp3/` | DFPlayer 语音 | 串口 `DFPlayer OK`，每 3 秒一句 |
 | 3 | `3_net/` | Wi-Fi + 访问服务器 | 串口打印出 `DATE= / H=...` |
 | 4 | `4_buttons/` | 按键 + 蜂鸣器 | 按下有"嘀"声 + 串口打印 |
-| 5 | `../firmware/habit_coach/` | 完整固件 | 屏幕出现小豆的脸 + 星星 |
+| 5 | `../habit_coach/` | 完整固件 | 屏幕出现小豆的脸 + 星星 |
 
 **前四步都通过再烧完整固件。** 哪一步失败就只查那一步，别在一堆可能性里猜。
 
-严重故障的排查顺序见 `../硬件清单与验收.md` 第三节。
+严重故障的排查顺序见 [`../../docs/manual.md`](../../docs/manual.md) 的排错章节。
 
 依赖库（库管理器装）：
 - `Arduino_GFX_Library`（moononournation）>= 1.6.5

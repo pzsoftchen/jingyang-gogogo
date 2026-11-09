@@ -3,7 +3,7 @@
 """
 习惯伙伴 · 家长端小服务（零依赖，只用 Python 标准库）
 
-启动：  python3 server.py
+启动：  python3 server/server.py（在仓库根目录），或 cd server && python3 server.py
 家长页：http://<这台机器的局域网IP>:8099
 设备端：GET  /api/state.txt?device=coach
         POST /api/checkin.txt?habit=brush
@@ -27,7 +27,9 @@ import card as cardrender
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(HERE, "coach.db")
+ROOT = os.path.dirname(HERE)
+# 数据目录默认在仓库根目录，保持与旧版一致；可用 COACH_DB 覆盖。
+DB_PATH = os.environ.get("COACH_DB", os.path.join(ROOT, "coach.db"))
 PORT = 8099
 
 # ----------------------------- 默认配置 -----------------------------

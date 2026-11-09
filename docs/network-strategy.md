@@ -9,7 +9,7 @@
 
 ```
 手机 ──┐
-       ├── 同一个 Wi-Fi ── server.py（电脑） ── 设备
+       ├── 同一个 Wi-Fi ── server/server.py（电脑） ── 设备
        │                      SQLite 本地
        └── /album、家长页
 ```
@@ -76,16 +76,16 @@
 ## 五、升级路径（不破坏现有架构）
 
 ```
-今天：设备 ← LAN ← server.py ← SQLite（本地）
+今天：设备 ← LAN ← server/server.py ← SQLite（本地）
         │
-L2：   设备 ← LAN ← server.py ← SQLite（本地，主）
+L2：   设备 ← LAN ← server/server.py ← SQLite（本地，主）
                         │
                         ├─→ 对象存储（每日加密备份）
                         ├─→ 消息通道（远程认可中转）
                         └─→ 语音包分发（HTTP 下载，设备从服务器取）
 ```
 
-改动集中在 `server.py`（加一个 `cloud.py` 适配层 + 一个开关），
+改动集中在 `server/server.py`（加一个 `cloud.py` 适配层 + 一个开关），
 设备端只在"取语音包"这一个点上需要改（而且那是换硬件时才做的事）。
 
 ---

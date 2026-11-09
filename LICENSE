@@ -21,6 +21,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ---
-关于 voice-pack/ 里的音频：
+关于 firmware/voice-pack/ 里的音频：
 这些文件是用 macOS 的 say 命令在本地合成的，仅用于这个家庭项目。
-你可以用 voice-pack/make_voice.sh 重新生成，或换成自己录的声音。
+你可以用 firmware/voice-pack/make_voice.sh 重新生成，或换成自己录的声音。
