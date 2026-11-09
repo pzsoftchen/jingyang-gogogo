@@ -31,6 +31,7 @@
 #include "habit_icons.h"      // 习惯 emoji 图标（由 tools/gen_icons.py 生成）
 #include "st77916_185c_init.h" // 1.85C 专用 ST77916 厂商初始化表
 #include "ui_theme.h"         // 四幕时段/调色板/弧线/音量纯函数
+#include "habit_sync.h"       // 服务器完成状态 → 本地勾选的纯函数
 #include <esp_heap_caps.h>
 #include <pgmspace.h>
 #if __has_include(<esp_arduino_version.h>)
@@ -1044,6 +1045,19 @@ void parseWeek(const String &v) {
   }
 }
 
+// 这个习惯是否还有没上报的打卡（离线队列里）。
+bool checkinQueued(const String &id) {
+  String prefix = id + "@";
+  int pos = 0;
+  while (pos < (int)queue.length()) {
+    int sep = queue.indexOf(';', pos);
+    if (sep < 0) break;
+    if (queue.substring(pos, sep).startsWith(prefix)) return true;
+    pos = sep + 1;
+  }
+  return false;
+}
+
 // 解析 H=id|名字|是否完成|完成时间|提醒语音|完成语音|提醒时|提醒分
 void parseHabitLine(const String &line) {
   String f[11];                             // 10 个字段：id..语音序列..最短秒数
@@ -1057,7 +1071,9 @@ void parseHabitLine(const String &line) {
   if (n < 3) return;
   int idx = ensureHabit(f[0]);
   if (idx < 0) return;
-  if (f[2].toInt() == 1) hab[idx].done = true;
+  // 双向同步：家长页撤回后也要能清掉勾选（离线补记未上报时除外）
+  hab[idx].done = habit_done_from_server(hab[idx].done, f[2].toInt(),
+                                         checkinQueued(f[0]));
   if (n >= 8) {
     hab[idx].rt = f[4].toInt();
     hab[idx].dt = f[5].toInt();

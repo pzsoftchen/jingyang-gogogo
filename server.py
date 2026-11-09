@@ -504,6 +504,31 @@ def week_view(conn, days=7, active_ids=None):
     return out
 
 
+def week_cal(conn, active_ids=None, today=None):
+    """本周一到周日是否完成（按当前启用习惯数）。给设备画顶部周弧用。
+
+    返回 7 个 0/1；未来日期固定为 0。今天全部完成时最后一位为 1。
+    """
+    today = today or datetime.date.today()
+    if active_ids is None:
+        active_ids = {h["id"] for h in get_habits(conn)}
+    active = set(active_ids)
+    total = len(active)
+    monday = today - datetime.timedelta(days=today.weekday())
+    out = []
+    for i in range(7):
+        d = monday + datetime.timedelta(days=i)
+        if d > today or total == 0:
+            out.append(0)
+            continue
+        rows = conn.execute(
+            "SELECT habit_id FROM checkins WHERE day=?", (d.isoformat(),)
+        ).fetchall()
+        done = {r["habit_id"] for r in rows} & active
+        out.append(1 if len(done) >= total else 0)
+    return out
+
+
 # ---------------- 识字包（5 岁半，30 个字）----------------
 # 选字顺序不是按笔画，而是按"动机 > 生活会用到 > 象形":
 #   先自己的名字和家人 → 身体 → 家里 → 自然 → 动作
@@ -1568,10 +1593,14 @@ def state_as_text(conn):
     lines.append("Q=%d" % _n)
 
     # 近 7 天是否"全部完成"：给设备画 7 个格子（5 岁半看不懂数字，但看得懂格子填满）
-    wk = week_view(conn, 7, set(h["id"] for h in get_habits(conn)))
+    active_ids = set(h["id"] for h in get_habits(conn))
+    wk = week_view(conn, 7, active_ids)
     lines.append("WEEK=" + ",".join(
         "1" if (s["total"] > 0 and d["count"] >= s["total"]) else "0" for d in wk
     ))
+    # 新周弧：本周一到周日 + 今天周几（1=周一）。旧固件忽略这两行。
+    lines.append("WEEK_CAL=" + ",".join(str(x) for x in week_cal(conn, active_ids)))
+    lines.append("WEEKDAY=%d" % datetime.date.today().isoweekday())
 
     for h in s["habits"]:
         mt = habit_meta(h["id"])
@@ -1625,9 +1654,13 @@ PAGE = """<!doctype html>
   .streak b{font-size:40px;line-height:1;color:var(--warn)}
   .habit{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px dashed var(--line)}
   .habit:last-child{border-bottom:0}
-  .dot{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);
-       display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--dim)}
+  .dot{position:relative;width:26px;height:26px;border-radius:50%;border:2px solid var(--line);
+       display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--dim);
+       padding:0;font-family:inherit;line-height:1;cursor:pointer;background:transparent}
+  .dot:after{content:"";position:absolute;inset:-9px;border-radius:50%}
+  .dot:hover{border-color:var(--ok)}
   .dot.on{background:var(--ok);border-color:var(--ok);color:#06281c;font-weight:700}
+  .dot.on:hover{box-shadow:0 0 0 3px rgba(91,200,176,.25)}
   .name{flex:1}
   .time{color:var(--dim);font-size:13px}
   .week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;text-align:center}
@@ -1923,10 +1956,15 @@ def render_page(conn, sent=""):
         t = (h["checked_at"] or "")[-8:-3] if h["done"] else "还没完成"
         pst = preset_of(h["id"])
         steps = ('<br><span class="stepsm">%s</span>' % pst[8]) if (pst and pst[8]) else ""
+        tip = "撤回今天的记录" if h["done"] else "标记完成"
+        confirm = (' onsubmit="return confirm(\'撤回「%s」今天的记录？\')"'
+                   % h["name"]) if h["done"] else ""
         habits_html.append(
-            '<div class="habit"><div class="%s">%s</div>'
-            '<div class="name">%s %s%s</div><div class="time">%s</div></div>'
-            % (cls, mark, h["emoji"], h["name"], steps, t)
+            '<form class="habit" method="post" action="/parent/toggle"%s>'
+            '<input type="hidden" name="habit" value="%s">'
+            '<button type="submit" class="%s" title="%s" aria-label="%s">%s</button>'
+            '<div class="name">%s %s%s</div><div class="time">%s</div></form>'
+            % (confirm, h["id"], cls, tip, tip, mark, h["emoji"], h["name"], steps, t)
         )
 
     week_html = []
@@ -2234,6 +2272,8 @@ class Handler(BaseHTTPRequestHandler):
                     "stagenone": "⚠️ 未知阶段。",
                     "hab0": "⚠️ 至少要开 1 件。",
                     "revoked": "↩️ 已撤回该记录（只在家长页留痕，设备端不会提示孩子）",
+                    "checked": "✅ 已补记完成（和他在设备上打卡一样）",
+                    "haberr": "⚠️ 这个习惯没开启，没能记录。",
                     "volsaved": "✅ 音量已保存，设备下次同步会应用。",
                     "qadd": "✅ 记下了。回家再一起找答案——别在路上就给答案，先问问他怎么想。",
                     "qfill": "✅ 问题补上了，现在可以让 AI 起草答案。",
@@ -2472,6 +2512,24 @@ class Handler(BaseHTTPRequestHandler):
                 txt = (form.get("answer") or [""])[0]
                 answer_question(conn, qid, txt, announce=True)
                 return self._send(303, "", headers={"Location": "/?sent=qans"})
+
+            if path == "/parent/toggle":
+                form = self._form()
+                hid = (form.get("habit") or [""])[0]
+                day = today_str()
+                done = conn.execute(
+                    "SELECT 1 FROM checkins WHERE habit_id=? AND day=?", (hid, day)
+                ).fetchone()
+                if done:
+                    conn.execute("DELETE FROM checkins WHERE habit_id=? AND day=?", (hid, day))
+                    conn.execute("INSERT INTO events(kind,detail,ts) VALUES('revoke',?,?)",
+                                 ("%s@%s" % (hid, day), now_iso()))
+                    conn.commit()
+                    return self._send(303, "", headers={"Location": "/?sent=revoked"})
+                ok, _msg = check_in(conn, hid, "parent")
+                if not ok:
+                    return self._send(303, "", headers={"Location": "/?sent=haberr"})
+                return self._send(303, "", headers={"Location": "/?sent=checked"})
 
             if path == "/parent/revoke":
                 form = self._form()

@@ -272,6 +272,42 @@ class CardTests(Base):
         self.assertEqual(q["id"], newer)
 
 
+class WeekCalTests(Base):
+    def _seed(self, day, habits=("brush", "toys")):
+        for h in habits:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO checkins(habit_id,day,ts) VALUES(?,?,?)",
+                (h, day, day + " 20:00:00"),
+            )
+        self.conn.commit()
+
+    def test_monday_to_sunday_order_and_future_empty(self):
+        monday = datetime.date(2026, 11, 9)  # 周一
+        for i in range(7):
+            self._seed((monday + datetime.timedelta(days=i)).isoformat())
+        cal = server.week_cal(self.conn, {"brush", "toys"}, today=monday)
+        self.assertEqual(cal, [1, 0, 0, 0, 0, 0, 0], "未来日期必须为空")
+        sunday = monday + datetime.timedelta(days=6)
+        cal = server.week_cal(self.conn, {"brush", "toys"}, today=sunday)
+        self.assertEqual(cal, [1] * 7)
+
+    def test_requires_all_active_habits(self):
+        monday = datetime.date(2026, 11, 9)
+        self._seed(monday.isoformat(), ("brush",))
+        cal = server.week_cal(self.conn, {"brush", "toys"}, today=monday)
+        self.assertEqual(cal[0], 0, "只完成一件不算完成")
+
+    def test_cross_month_and_sunday_boundary(self):
+        # 2026-12-31 是周四；本周从 2026-12-28（周一）开始
+        monday = datetime.date(2026, 12, 28)
+        thursday = datetime.date(2026, 12, 31)
+        self._seed(monday.isoformat())
+        self._seed(thursday.isoformat())
+        cal = server.week_cal(self.conn, {"brush", "toys"}, today=thursday)
+        self.assertEqual(cal[:4], [1, 0, 0, 1])
+        self.assertEqual(cal[4:], [0, 0, 0])
+
+
 class ProtocolTests(Base):
     def test_state_text_has_ten_fields(self):
         text = server.state_as_text(self.conn)
@@ -286,6 +322,12 @@ class ProtocolTests(Base):
         self.assertIn("WEEK=", text)
         week = [l for l in text.splitlines() if l.startswith("WEEK=")][0]
         self.assertEqual(len(week[5:].split(",")), 7)
+
+    def test_state_text_has_week_cal_and_weekday(self):
+        text = server.state_as_text(self.conn)
+        cal = [l for l in text.splitlines() if l.startswith("WEEK_CAL=")][0]
+        self.assertEqual(len(cal[9:].split(",")), 7, "WEEK_CAL 必须是周一到周日 7 位")
+        self.assertIn("WEEKDAY=%d" % datetime.date.today().isoweekday(), text)
 
     def test_state_text_msg_uses_track(self):
         server.push_card(self.conn, "牙")
@@ -455,6 +497,32 @@ class HttpTests(HttpBase, Base):
         code2, _ = self.post("/api/checkin.txt?habit=brush")
         self.assertEqual(code2, 409, "重复打卡应返回 409")
 
+    def test_home_habit_dot_is_clickable_toggle(self):
+        """「今天要做的」那个圆点要能点——它看起来像单选钮，不能只是静态图标。"""
+        _code, body = self.get("/")
+        html = body.decode("utf-8")
+        self.assertIn('action="/parent/toggle"', html,
+                      "习惯行没有接到任何表单，点圆点没反应")
+        self.assertRegex(html, r'<button[^>]*class="dot', "圆点应渲染成可点的按钮")
+
+    def test_parent_toggle_checks_in_then_revokes(self):
+        """点一下圆点=补记完成，再点一下=撤回。"""
+        day = server.today_str()
+
+        code, _ = self.post("/parent/toggle", {"habit": "brush"})
+        self.assertEqual(code, 200)     # 跟随 303 回到首页
+        done = self.conn.execute(
+            "SELECT 1 FROM checkins WHERE habit_id='brush' AND day=?", (day,)
+        ).fetchone()
+        self.assertIsNotNone(done, "第一次点圆点应该补记完成")
+
+        code, _ = self.post("/parent/toggle", {"habit": "brush"})
+        self.assertEqual(code, 200)
+        done = self.conn.execute(
+            "SELECT 1 FROM checkins WHERE habit_id='brush' AND day=?", (day,)
+        ).fetchone()
+        self.assertIsNone(done, "再点一下应该撤回记录")
+
     def test_rgb565_endpoint_returns_device_buffer(self):
         server.push_card(self.conn, "牙")
         code, body = self.get("/api/card.rgb565?i=0")
@@ -563,7 +631,8 @@ class HttpTests(HttpBase, Base):
         """老固件遇到新字段要能忽略——这条保证'只追加不改动'的约定可验证。"""
         text = server.state_as_text(self.conn)
         known = ("V=", "DATE=", "CHILD=", "COACH=", "STREAK=", "DONE=", "Q=",
-                 "WEEK=", "H=", "MSG=", "PACK=", "VOL=", "END")
+                 "WEEK=", "WEEK_CAL=", "WEEKDAY=", "H=", "MSG=", "PACK=",
+                 "VOL=", "END")
         for line in text.splitlines():
             if not line:
                 continue
