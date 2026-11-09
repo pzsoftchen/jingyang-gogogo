@@ -28,7 +28,7 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <Arduino_GFX_Library.h>
-#include "habit_icons.h"      // 习惯 emoji 图标（由 tools/gen_icons.py 生成）
+#include "habit_icons.h"      // 习惯 emoji 图标（由 firmware/tools/gen_icons.py 生成）
 #include "st77916_185c_init.h" // 1.85C 专用 ST77916 厂商初始化表
 #include "ui_theme.h"         // 四幕时段/调色板/弧线/音量纯函数
 #include "habit_sync.h"       // 服务器完成状态 → 本地勾选的纯函数

@@ -4,7 +4,7 @@
 #include <cstring>
 #include <initializer_list>
 
-#include "../../firmware/habit_coach/ui_theme.h"
+#include "../habit_coach/ui_theme.h"
 
 static int failures = 0;
 

@@ -2,7 +2,7 @@
 // 家长页撤回后，设备上的勾选必须跟着消失；但离线补记还没上报时不能清。
 #include <cstdio>
 
-#include "../../firmware/habit_coach/habit_sync.h"
+#include "../habit_coach/habit_sync.h"
 
 static int failures = 0;
 

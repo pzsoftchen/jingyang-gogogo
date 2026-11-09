@@ -1,4 +1,4 @@
-// 由 tools/gen_icons.py 自动生成，不要手改。
+// 由 firmware/tools/gen_icons.py 自动生成，不要手改。
 // 习惯 emoji 图标：14 个 × 40×40 RGB565，小端字节序。
 #pragma once
 

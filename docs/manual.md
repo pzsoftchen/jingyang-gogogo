@@ -9,18 +9,18 @@
 
 | 部分 | 状态 | 文件 |
 |---|---|---|
-| 家长端服务（打卡/连续天数/认可/离线队列） | ✅ 已跑通并实测 | [`server.py`](server.py) |
-| 家长手机页（看进度 + 发认可） | ✅ 已跑通 | `server.py` 内置 |
-| 角色语音包 30 条（Tingting 音色） | ✅ 已生成 | [`voice-pack/mp3/`](../voice-pack/mp3/) |
-| 语音包重新生成脚本 | ✅ | [`../voice-pack/make_voice.sh`](../voice-pack/make_voice.sh) |
+| 家长端服务（打卡/连续天数/认可/离线队列） | ✅ 已跑通并实测 | [`server/server.py`](../server/server.py) |
+| 家长手机页（看进度 + 发认可） | ✅ 已跑通 | `server/server.py` 内置 |
+| 预录语音包 147 条（Tingting 音色；0031–0040 建议换成真人录音） | ✅ 已生成 | [`firmware/voice-pack/mp3/`](../firmware/voice-pack/mp3/) |
+| 语音包重新生成脚本 | ✅ | [`firmware/voice-pack/make_voice.sh`](../firmware/voice-pack/make_voice.sh) |
 | 设备固件（离线可用 + 联网同步） | ⚠️ 代码就绪，**需你接线后编译烧录** | [`firmware/habit_coach/habit_coach.ino`](../firmware/habit_coach/habit_coach.ino) |
-| 习惯养成体系（科学依据 + 产品映射） | ✅ | [`习惯养成体系.md`](习惯养成体系.md) |
-| 里程碑自动播报（3/7/14/30 天） | ✅ 已跑通 | `server.py` + 语音 0021–0024 |
+| 习惯养成体系（科学依据 + 产品映射） | ✅ | [`习惯养成体系.md`](habit-system.md) |
+| 里程碑自动播报（3/7/14/30 天） | ✅ 已跑通 | `server/server.py` + 语音 0021–0024 |
 | 能力徽章 + 周回顾卡 | ✅ 已跑通 | 家长页 |
 | **习惯数量可调（1–4 件，页面开关，设备自动跟）** | ✅ 已跑通 | 家长页「这个月开几件事」 |
 | **问题罐（户外的问题回家一起找答案，AI 只写给大人）** | ✅ 已跑通 | 家长页 + 语音 0064/0065 |
-| **问题卡（设备上显示中文问答，服务器出图）** | ✅ 已跑通 | `card.py` + `/api/card.rgb565` |
-| **认一个字（30 字识字包，只认不写，与生活场景绑）** | ✅ 已跑通 | `card.py` + 语音 0101–0130 |
+| **问题卡（设备上显示中文问答，服务器出图）** | ✅ 已跑通 | `server/card.py` + `/api/card.rgb565` |
+| **认一个字（30 字识字包，只认不写，与生活场景绑）** | ✅ 已跑通 | `server/card.py` + 语音 0101–0130 |
 | **识字自动联动（完成习惯 → 自动推对应字）** | ✅ 已跑通 | `HABIT_ZIKA` 映射 |
 | **间隔重复复习（1/3/7/15 天，不考试）** | ✅ 已跑通 | `zika_log` + 语音 0201–0230 |
 | **成长档案（字卡墙 / 问题册 / 第一次 / 可打印）** | ✅ 已跑通 | `/album` |
@@ -77,7 +77,7 @@
 ## 五、三步跑起来
 
 ### 第 1 步：准备 SD 卡（2 分钟）
-把 [`voice-pack/mp3/`](../voice-pack/mp3/) 整个文件夹拷到 SD 卡根目录，命名为 `mp3`：
+把 [`firmware/voice-pack/mp3/`](../firmware/voice-pack/mp3/) 整个文件夹拷到 SD 卡根目录，命名为 `mp3`：
 ```
 SD卡/
 └── mp3/
@@ -106,7 +106,7 @@ SD卡/
 ### 第 3 步：起家长端
 ```bash
 cd ~/esp32/habit-coach
-python3 server.py
+python3 server/server.py
 ```
 - 电脑上打开 <http://127.0.0.1:8099>
 - 手机上打开 `http://<电脑局域网IP>:8099`（同一 Wi-Fi）
@@ -144,7 +144,7 @@ python3 server.py
 
 ---
 
-## 八、台词表（改台词就改 `../voice-pack/make_voice.sh` 重跑）
+## 八、台词表（改台词就改 `../firmware/voice-pack/make_voice.sh` 重跑）
 
 | 编号 | 用途 | 触发 |
 |---|---|---|
@@ -182,7 +182,7 @@ python3 server.py
 
 改完 `VOICE` / `RATE` 环境变量可以换音色和语速：
 ```bash
-cd voice-pack && VOICE=Meijia RATE=160 ./make_voice.sh
+cd firmware/voice-pack && VOICE=Meijia RATE=160 ./make_voice.sh
 ```
 （可选音色：`Tingting` 普通话、`Meijia` 台湾腔、`Sinji` 粤语）
 
@@ -268,7 +268,7 @@ POC 阶段一台设备，`d` 恒为 `poc`；上云后每台设备一行，天然
 **换语音包（阶段升级的必经步骤）**
 
 ```bash
-cd voice-pack
+cd firmware/voice-pack
 # 改 make_voice.sh 里的台词（句子变长、称呼变化），然后
 VOICE=Tingting RATE=160 ./make_voice.sh
 # 把 mp3/ 拷到 SD 卡，插回 DFPlayer
@@ -304,7 +304,7 @@ VOICE=Tingting RATE=160 ./make_voice.sh
 理由：5 岁半不识字，能认出"牙刷"但认不出"第三颗星"。家长页和屏幕上用的是同一个图标，
 孩子和家长看到的是同一件事。
 
-- 图标由 `tools/gen_icons.py` 用 Apple Color Emoji 预渲染成 40×40 RGB565，
+- 图标由 `firmware/tools/gen_icons.py` 用 Apple Color Emoji 预渲染成 40×40 RGB565，
   生成 `firmware/habit_coach/habit_icons.h`（14 个图标，约 45KB）
 - 设备端零字库、零缩放，直接 `draw16bitRGBBitmap` 贴图
 - 完成态：金色圆环 + 右下角对勾；未完成：暗色圆环；选中：外圈橙色
@@ -315,10 +315,10 @@ VOICE=Tingting RATE=160 ./make_voice.sh
 重新生成图标（改了 emoji 或加了新习惯）：
 
 ```bash
-python3 tools/gen_icons.py     # 会同时更新 docs/img/habit_icons.png 预览图
+python3 firmware/tools/gen_icons.py     # 会同时更新 docs/img/habit_icons.png 预览图
 ```
 
-改完记得在 `server.py` 的 `HABIT_PRESETS` 和 `tools/gen_icons.py` 的 `ICONS` 里保持 id 一致。
+改完记得在 `server/server.py` 的 `HABIT_PRESETS` 和 `firmware/tools/gen_icons.py` 的 `ICONS` 里保持 id 一致。
 
 ---
 
@@ -462,7 +462,7 @@ python3 tools/gen_icons.py     # 会同时更新 docs/img/habit_icons.png 预览
 export DASHSCOPE_API_KEY=sk-xxx      # 阿里通义
 # 或 export OPENAI_API_KEY=sk-xxx
 # 或 export DEEPSEEK_API_KEY=sk-xxx
-python3 server.py
+python3 server/server.py
 ```
 不配 key 也不影响记问题——AI 那步会提示"先自己写吧"，你手写一样可以播报。
 
@@ -481,7 +481,7 @@ python3 server.py
 
 ```
 家长页（审核答案）
-   ↓ card.py + PingFang 字体，渲染 240×240
+   ↓ server/card.py + PingFang 字体，渲染 240×240
    ↓ GET /api/card.rgb565?i=N   ← 115200 字节 RGB565
 ESP32：memcpy 到 canvas 的 framebuffer，直接 flush
 ```
@@ -489,7 +489,7 @@ ESP32：memcpy 到 canvas 的 framebuffer，直接 flush
 好处：
 
 - 设备端**零字库、零排版**，中文、标点、换行全在服务器解决
-- 改样式只改 `card.py`，不用重烧固件
+- 改样式只改 `server/card.py`，不用重烧固件
 - 一页一个想法（答案 / 你可以问问看 / 一起做），5 岁半不识字也能跟着家长念
 
 **用法**：家长页写完答案 → 点「在设备上播放这张卡」→ 设备先播
@@ -533,7 +533,7 @@ ESP32：memcpy 到 canvas 的 framebuffer，直接 flush
 走 / 看 / 吃 / 玩 / 睡 / 大 / 小       ← 动作与形容词
 ```
 
-**卡片是两页**（`card.py: render_zika`）：
+**卡片是两页**（`server/card.py: render_zika`）：
 
 - 第 1 页：一个大字（128px）+ 底下一个词例（"刷牙"）
 - 第 2 页：词里出现它（「刷**牙**」，目标字高亮金色）+ "找一找：家里哪里有它？"

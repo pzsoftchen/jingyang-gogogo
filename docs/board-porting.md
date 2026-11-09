@@ -156,7 +156,7 @@ gfx->begin(40000000);   // 3) 再初始化屏幕（40 MHz）
 
 ## 六、首次点亮 checklist（1.85）
 
-1. 烧 `hardware-test/0_board_check` → 确认 **Flash 16MB / PSRAM 8MB / 115KB 分配 OK**
+1. 烧 `firmware/hardware-test/0_board_check` → 确认 **Flash 16MB / PSRAM 8MB / 115KB 分配 OK**
 2. 烧完整固件，串口按顺序看：
    ```
    [tca9554] cfg=F0 out=0F      ← 扩展器写成功（1.85C 已验证）
@@ -187,8 +187,8 @@ gfx->begin(40000000);   // 3) 再初始化屏幕（40 MHz）
 **编译命令**（不需要硬件）：
 
 ```bash
-./tools/build.sh all      # 三种板都编译
-./tools/build.sh 185c     # 只编 1.85C（带外壳版）
+./firmware/tools/build.sh all      # 三种板都编译
+./firmware/tools/build.sh 185c     # 只编 1.85C（带外壳版）
 ```
 
 > 首次编译暴露并修掉了 3 个真问题：`struct Btn` 定义顺序（Arduino 自动原型）、

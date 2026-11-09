@@ -6,7 +6,7 @@
   设备端没有 emoji 字体（Arduino_GFX 只带 ASCII 位图），也放不下彩色字库。
   所以用 macOS 的 Apple Color Emoji 在电脑上渲染好，直接给设备贴图。
 
-用法：python3 tools/gen_icons.py
+用法：python3 firmware/tools/gen_icons.py
 产物：firmware/habit_coach/habit_icons.h
 """
 
@@ -18,9 +18,9 @@ SIZE = 40                     # 图标边长（px）
 BG = (20, 26, 34)             # 与设备背景接近，用于合成透明区域
 EMOJI_FONT = "/System/Library/Fonts/Apple Color Emoji.ttc"
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "firmware", "habit_coach", "habit_icons.h")
+                   "habit_coach", "habit_icons.h")
 
-# id 必须和 server.py 里 HABIT_PRESETS 的 id 一致
+# id 必须和 server/server.py 里 HABIT_PRESETS 的 id 一致
 ICONS = [
     ("brush",    "🪥"),
     ("toys",     "🧸"),
@@ -71,7 +71,7 @@ def main():
         data.append(to_rgb565(render_emoji(ch)))
 
     lines = [
-        "// 由 tools/gen_icons.py 自动生成，不要手改。",
+        "// 由 firmware/tools/gen_icons.py 自动生成，不要手改。",
         "// 习惯 emoji 图标：%d 个 × %d×%d RGB565，小端字节序。" % (len(ICONS), SIZE, SIZE),
         "#pragma once",
         "",

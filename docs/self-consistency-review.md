@@ -115,7 +115,7 @@ BADGES = [
 
 **后果**：设备上这项会退回画星星，和别的习惯长得不一样。
 
-**修复**：`tools/gen_icons.py` 的 `ICONS` 补一行 `("bath", "🛁")`（可以和 bathflow 共用图，但 id 要各自有一份）。
+**修复**：`firmware/tools/gen_icons.py` 的 `ICONS` 补一行 `("bath", "🛁")`（可以和 bathflow 共用图，但 id 要各自有一份）。
 
 ---
 
@@ -206,7 +206,7 @@ BADGES = [
 修复过程中一次正则误删把 `render_page` 的 `slots_html` 删掉，页面 500——
 说明"改代码 + 肉眼验证"已经不够了。
 
-已加 `tests/test_server.py`：**35 个测试**，覆盖
+已加 `tests/test_server/server.py`：**35 个测试**，覆盖
 
 | 组 | 内容 |
 |---|---|

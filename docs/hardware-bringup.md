@@ -71,7 +71,7 @@
 
 ---
 
-### Step 0.5 · 板子验真（`../hardware-test/0_board_check`）
+### Step 0.5 · 板子验真（`../firmware/hardware-test/0_board_check`）
 
 **到货第一件事，先烧这个，别的都别接。**
 
@@ -88,7 +88,7 @@ PSRAM    : 8388608 bytes   (8.0 MB)  ✓
 
 ---
 
-### Step 1 · 点屏（`../hardware-test/1_display`）
+### Step 1 · 点屏（`../firmware/hardware-test/1_display`）
 
 **只接屏幕，不接其他**。烧 `1_display.ino`。
 
@@ -101,9 +101,9 @@ PSRAM    : 8388608 bytes   (8.0 MB)  ✓
 
 ---
 
-### Step 2 · 语音（`../hardware-test/2_mp3`）
+### Step 2 · 语音（`../firmware/hardware-test/2_mp3`）
 
-1. 把 `../voice-pack/mp3/` 拷到 SD 卡根目录，文件夹名 **`mp3`**
+1. 把 `../firmware/voice-pack/mp3/` 拷到 SD 卡根目录，文件夹名 **`mp3`**
 2. 插进 DFPlayer
 3. 烧 `2_mp3.ino`（这时可以只接 DFPlayer，不接屏）
 
@@ -118,10 +118,10 @@ PSRAM    : 8388608 bytes   (8.0 MB)  ✓
 
 ---
 
-### Step 3 · 网络（`../hardware-test/3_net`）
+### Step 3 · 网络（`../firmware/hardware-test/3_net`）
 
 1. 复制 `secrets.h.example` 为 `secrets.h`，填 Wi-Fi 和电脑 IP
-2. 电脑上先跑 `python3 server.py`
+2. 电脑上先跑 `python3 server/server.py`
 3. 烧 `3_net.ino`，串口看输出
 
 ✅ 成功：串口打印 IP，然后打印出服务器返回的 `DATE= / STREAK= / H=...`
@@ -133,7 +133,7 @@ PSRAM    : 8388608 bytes   (8.0 MB)  ✓
 
 ---
 
-### Step 4 · 按键 + 蜂鸣器（`../hardware-test/4_buttons`）
+### Step 4 · 按键 + 蜂鸣器（`../firmware/hardware-test/4_buttons`）
 
 ✅ 成功：按 A/B 有"嘀"声，串口打印 `A down` / `B down`
 ❌ 排查：按键没反应 → 引脚接 GND 了吗（代码用 `INPUT_PULLUP`，按下是 LOW）
@@ -202,7 +202,7 @@ PSRAM    : 8388608 bytes   (8.0 MB)  ✓
 1. 把手上的旧 microSD 卡找出来，格式化成 **FAT32**
 2. 电脑装好 Arduino IDE 2.x + esp32 开发板包（3.3.x 或更新）
 3. 库管理器装两个库：**Arduino_GFX_Library**、**DFRobotDFPlayerMini**
-4. 跑一遍 `python3 server.py`，用手机试试家长页
+4. 跑一遍 `python3 server/server.py`，用手机试试家长页
 5. 把 `secrets.h.example` 复制成 `secrets.h` 填好（WiFi 名/密码/电脑 IP）
 
 到货那天，前四步大概 40 分钟能全部验证完。

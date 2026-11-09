@@ -234,7 +234,7 @@
  ┌──────────────────────┐
  │ 今天的惊喜（一天一个）   │
  │ 今天要做的            │      ┌────────────────────────┐
- │ 给他一句话            │─────▶│  server.py（零依赖）     │
+ │ 给他一句话            │─────▶│  server/（零依赖）       │
  │ 成长档案 /album       │      │  SQLite：打卡/问答/字卡  │
  └──────────────────────┘      └───────────┬────────────┘
                                            │ GET /api/state.txt（每 15 秒）
@@ -284,14 +284,20 @@
 
 ```
 .
-├── server.py              # 家长端服务（纯标准库 http.server + SQLite）
-├── card.py                # 卡片渲染：问题卡 / 识字卡 → 240×240 RGB565
-├── firmware/habit_coach/  # 设备端固件 + ui_theme/habit_sync 纯函数（ESP32-S3，~1400 行）
-├── hardware-test/         # 分步验收：验真 / 点屏 / 语音 / 网络 / 按键
-├── voice-pack/            # 预录语音 + 生成脚本（macOS say + ffmpeg）
-├── tests/                 # 95 个 Python 回归测试 + tests/firmware/ 主机端测试
+├── server/                # 家长端服务模块
+│   ├── server.py          # 纯标准库 http.server + SQLite
+│   ├── card.py            # 卡片渲染：问题卡 / 识字卡 → 240/360 RGB565
+│   ├── tests/             # 95 个 Python 回归测试
+│   └── tools/             # 演示数据 / 一键清空
+├── firmware/              # 设备端固件模块
+│   ├── habit_coach/       # ESP32-S3 固件 + ui_theme/habit_sync 纯函数
+│   ├── tests/             # 主机端 C++ 纯函数测试
+│   ├── tools/             # 编译 / 主机端测试 / 图标生成
+│   ├── voice-pack/        # 预录语音 + 生成脚本（macOS say + ffmpeg）
+│   └── hardware-test/     # 分步验收：验真 / 点屏 / 语音 / 网络 / 按键
 ├── docs/                  # 设计文档、评审、审计、手册、硬件清单
-└── tools/                 # 图标生成 / 固件编译 / 演示数据 / 一键清空
+├── Makefile               # 顶层编排：make test / build / run
+└── coach.db               # 运行时数据（本地，不提交）
 ```
 
 ---
@@ -300,19 +306,21 @@
 
 ```bash
 # 1. 起家长端（只需要 Python 3.9+）
-pip install -r requirements.txt
-python3 server.py            # 打开 http://127.0.0.1:8099
+pip install -r server/requirements.txt
+python3 server/server.py      # 打开 http://127.0.0.1:8099
+# 也可以：cd server && python3 server.py
 
 # 2. 看演示数据（可选）
-python3 tools/demo_seed.py
-./tools/reset.sh             # 正式用之前清空
+python3 server/tools/demo_seed.py
+./server/tools/reset.sh       # 正式用之前清空
 
 # 3. 跑回归测试（95 个 Python + 主机端固件测试，改完代码必跑）
 make test
 
 # 4. 设备端编译（不需要硬件）
-./tools/build.sh all          # DevKitC / 1.85 / 1.85C 三种板型
-./tools/build.sh 185c         # 只编 1.85C
+./firmware/tools/build.sh all     # DevKitC / 1.85 / 1.85C 三种板型
+./firmware/tools/build.sh 185c    # 只编 1.85C
+# 也可以：make build
 
 # 5. 真机：先跑分步验收，再烧完整固件
 #    见 docs/hardware-bringup.md
@@ -321,8 +329,8 @@ make test
 重新生成语音 / 图标：
 
 ```bash
-cd voice-pack && ./make_voice.sh     # 换音色、改台词（需 macOS say + ffmpeg）
-python3 tools/gen_icons.py           # 改了 emoji 或加了新习惯
+cd firmware/voice-pack && ./make_voice.sh   # 换音色、改台词（需 macOS say + ffmpeg）
+python3 firmware/tools/gen_icons.py         # 改了 emoji 或加了新习惯
 ```
 
 ---
@@ -366,5 +374,5 @@ python3 tools/gen_icons.py           # 改了 emoji 或加了新习惯
 
 ## License
 
-代码 MIT。`voice-pack/` 里的音频是用 macOS `say` 本地生成的，仅作个人使用；
+代码 MIT。`firmware/voice-pack/` 里的音频是用 macOS `say` 本地生成的，仅作个人使用；
 建议换成自己录的声音（见手册第七节），效果差别非常大。

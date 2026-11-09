@@ -2,7 +2,7 @@
  * 小豆豆的一天 · 主题纯函数
  * ---------------------------------------------------------------
  * 这个文件刻意不依赖 Arduino：时段、调色板、弧线坐标、音量映射
- * 都可以在电脑上用 clang++ 直接测试（tools/test_firmware.sh）。
+ * 都可以在电脑上用 clang++ 直接测试（firmware/tools/test_firmware.sh）。
  */
 #pragma once
 #include <stdint.h>
