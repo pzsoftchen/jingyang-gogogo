@@ -14,5 +14,8 @@ check:
 	python3 -m py_compile server.py card.py tools/demo_seed.py tests/test_server.py
 	echo "syntax OK"
 
-test:
+test-firmware:
+	./tools/test_firmware.sh
+
+test: test-firmware
 	python3 -m unittest discover -s tests -v

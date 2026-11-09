@@ -190,7 +190,9 @@ def init_db():
             name      TEXT DEFAULT '',
             token     TEXT DEFAULT '',
             created   TEXT NOT NULL,
-            last_seen TEXT DEFAULT ''
+            last_seen TEXT DEFAULT '',
+            ip        TEXT DEFAULT '',
+            rssi      INTEGER DEFAULT NULL
         );
         CREATE TABLE IF NOT EXISTS content_packs(
             name    TEXT PRIMARY KEY,          -- 'voice'（预录语音包）
@@ -291,6 +293,11 @@ def init_db():
         conn.execute("ALTER TABLE questions ADD COLUMN category TEXT DEFAULT ''")
     if qcols and "announced" not in qcols:
         conn.execute("ALTER TABLE questions ADD COLUMN announced INTEGER DEFAULT 0")
+    devcols = {r["name"] for r in conn.execute("PRAGMA table_info(devices)")}
+    if "ip" not in devcols:
+        conn.execute("ALTER TABLE devices ADD COLUMN ip TEXT DEFAULT ''")
+    if "rssi" not in devcols:
+        conn.execute("ALTER TABLE devices ADD COLUMN rssi INTEGER DEFAULT NULL")
     # 默认设置
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('child_name',?)", (CHILD_NAME,))
     conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('coach_name',?)", (COACH_NAME,))
@@ -347,6 +354,15 @@ def set_setting(conn, key, value):
     )
 
 
+def get_volume(conn):
+    """家长页音量 0–100，默认 60。"""
+    try:
+        v = int(get_setting(conn, "volume", "60"))
+    except (TypeError, ValueError):
+        v = 60
+    return max(0, min(100, v))
+
+
 def today_str():
     # 用一个明确的服务器时区，避免设备端时区问题
     return datetime.datetime.now().strftime("%Y-%m-%d")
@@ -354,6 +370,46 @@ def today_str():
 
 def now_iso():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def theme_for_time(hour, minute):
+    """06:30–20:00 为白天，其余为夜晚。"""
+    return "day" if (6, 30) <= (hour, minute) < (20, 0) else "night"
+
+
+def theme_now():
+    now = datetime.datetime.now()
+    return theme_for_time(now.hour, now.minute)
+
+
+def sun_svg(theme):
+    """家长页标题旁的小角色：白天太阳，夜里睡帽太阳。"""
+    if theme == "night":
+        return '''<svg class="sunart" viewBox="0 0 64 64" aria-hidden="true">
+<g stroke="var(--ray)" stroke-width="3" stroke-linecap="round" opacity=".55">
+<line x1="32" y1="7" x2="32" y2="12"/><line x1="7" y1="32" x2="12" y2="32"/><line x1="57" y1="32" x2="52" y2="32"/>
+<line x1="15" y1="15" x2="19" y2="19"/><line x1="49" y1="49" x2="45" y2="45"/>
+</g>
+<circle cx="32" cy="34" r="17" fill="var(--sun)"/>
+<path d="M18 24 Q24 10 32 18 L44 22 Q34 15 27 23 Z" fill="var(--cap)"/>
+<circle cx="28" cy="18" r="4" fill="#FFF4D6"/>
+<path d="M24 34 Q27 37 30 34" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/>
+<path d="M34 34 Q37 37 40 34" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/>
+<path d="M29 41 Q32 43 35 41" fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linecap="round"/>
+<circle cx="22" cy="39" r="2.5" fill="var(--cheek)" opacity=".45"/><circle cx="42" cy="39" r="2.5" fill="var(--cheek)" opacity=".45"/>
+</svg>'''
+    return '''<svg class="sunart" viewBox="0 0 64 64" aria-hidden="true">
+<g stroke="var(--ray)" stroke-width="4" stroke-linecap="round">
+<line x1="32" y1="5" x2="32" y2="11"/><line x1="32" y1="53" x2="32" y2="59"/>
+<line x1="5" y1="32" x2="11" y2="32"/><line x1="53" y1="32" x2="59" y2="32"/>
+<line x1="13" y1="13" x2="18" y2="18"/><line x1="46" y1="46" x2="51" y2="51"/>
+<line x1="51" y1="13" x2="46" y2="18"/><line x1="18" y1="46" x2="13" y2="51"/>
+</g>
+<circle cx="32" cy="32" r="17" fill="var(--sun)"/>
+<circle cx="25" cy="30" r="2.2" fill="var(--ink)"/><circle cx="39" cy="30" r="2.2" fill="var(--ink)"/>
+<circle cx="21" cy="37" r="3" fill="var(--cheek)" opacity=".75"/><circle cx="43" cy="37" r="3" fill="var(--cheek)" opacity=".75"/>
+<path d="M26 38 Q32 43 38 38" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/>
+</svg>'''
 
 
 # ----------------------------- 业务逻辑 -----------------------------
@@ -445,6 +501,31 @@ def week_view(conn, days=7, active_ids=None):
         if active_ids is not None:
             ids = ids & active_ids
         out.append({"day": d, "count": len(ids)})
+    return out
+
+
+def week_cal(conn, active_ids=None, today=None):
+    """本周一到周日是否完成（按当前启用习惯数）。给设备画顶部周弧用。
+
+    返回 7 个 0/1；未来日期固定为 0。今天全部完成时最后一位为 1。
+    """
+    today = today or datetime.date.today()
+    if active_ids is None:
+        active_ids = {h["id"] for h in get_habits(conn)}
+    active = set(active_ids)
+    total = len(active)
+    monday = today - datetime.timedelta(days=today.weekday())
+    out = []
+    for i in range(7):
+        d = monday + datetime.timedelta(days=i)
+        if d > today or total == 0:
+            out.append(0)
+            continue
+        rows = conn.execute(
+            "SELECT habit_id FROM checkins WHERE day=?", (d.isoformat(),)
+        ).fetchall()
+        done = {r["habit_id"] for r in rows} & active
+        out.append(1 if len(done) >= total else 0)
     return out
 
 
@@ -559,12 +640,98 @@ def token_ok(q, headers=None):
     return got == want
 
 
-def touch_device(conn, device_id):
+def rssi_of(q):
+    """设备上报的 Wi-Fi RSSI；不合法就返回 None，保留上一次的值。"""
+    try:
+        v = int((q.get("rssi") or [""])[0])
+    except (TypeError, ValueError):
+        return None
+    return v if -120 <= v <= 0 else None
+
+
+def touch_device(conn, device_id, ip="", rssi=None):
     conn.execute(
         "INSERT OR IGNORE INTO devices(id,name,created) VALUES(?,?,?)",
         (device_id, device_id, now_iso()))
-    conn.execute("UPDATE devices SET last_seen=? WHERE id=?", (now_iso(), device_id))
+    sets = ["last_seen=?"]
+    vals = [now_iso()]
+    if ip:
+        sets.append("ip=?")
+        vals.append(str(ip)[:45])
+    if rssi is not None:
+        sets.append("rssi=?")
+        vals.append(int(rssi))
+    vals.append(device_id)
+    conn.execute("UPDATE devices SET %s WHERE id=?" % ", ".join(sets), vals)
     conn.commit()
+
+
+def device_status(conn, device_id="poc"):
+    """家长页用的设备概况：在线、最后同步、IP、Wi-Fi 信号。"""
+    row = conn.execute(
+        "SELECT id,name,last_seen,ip,rssi FROM devices WHERE id=?", (device_id,)
+    ).fetchone()
+    if not row:
+        row = conn.execute(
+            "SELECT id,name,last_seen,ip,rssi FROM devices"
+            " ORDER BY last_seen DESC LIMIT 1").fetchone()
+    if not row:
+        return {"device_id": device_id, "online": False, "when": "未注册",
+                "last_seen": "", "ip": "", "rssi": None, "rssi_text": ""}
+
+    last = (row["last_seen"] or "").strip()
+    online = False
+    age = None
+    if last:
+        try:
+            dt = datetime.datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
+            age = max(0, int((datetime.datetime.now() - dt).total_seconds()))
+            online = age <= 45          # 设备 15 秒轮询，45 秒内算在线
+        except ValueError:
+            pass
+    if online:
+        when = "刚刚" if (age is not None and age < 10) else ("%d 秒前" % age)
+    else:
+        when = last[5:16] if last else "从未"
+
+    rssi = row["rssi"]
+    if rssi is None:
+        rssi_text = ""
+    else:
+        if rssi >= -55:
+            label = "强"
+        elif rssi >= -70:
+            label = "中"
+        else:
+            label = "弱"
+        rssi_text = "%d dBm · %s" % (rssi, label)
+    return {
+        "device_id": row["id"],
+        "online": online,
+        "when": when,
+        "last_seen": last,
+        "ip": (row["ip"] or "").strip(),
+        "rssi": rssi,
+        "rssi_text": rssi_text,
+    }
+
+
+def device_status_html(conn, device_id="poc"):
+    d = device_status(conn, device_id)
+    cls = "on" if d["online"] else "off"
+    if d["online"]:
+        state = ("设备在线 · 刚刚同步" if d["when"] == "刚刚"
+                 else "设备在线 · %s同步" % d["when"])
+    else:
+        state = "设备离线 · 最后同步 %s" % d["when"]
+    meta = []
+    if d["ip"]:
+        meta.append(d["ip"])
+    if d["rssi_text"]:
+        meta.append("Wi-Fi " + d["rssi_text"])
+    meta_html = ('<span class="devmeta">%s</span>' % " · ".join(meta)) if meta else ""
+    return ('<div class="devstatus %s"><span class="devdot"></span>'
+            '<span>%s</span>%s</div>' % (cls, state, meta_html))
 
 
 def voice_pack_version(conn):
@@ -652,10 +819,17 @@ def answer_question(conn, qid, answer, announce=True):
     conn.commit()
     if announce and take_push(conn, "surprise", "question:%d" % qid):
         clear_card_queue(conn)
+        set_question_card(conn, qid)
         add_approval(conn, "", "小豆", track=64, kind="question")
         conn.execute("UPDATE questions SET announced=1 WHERE id=?", (qid,))
         conn.commit()
     return True
+
+
+def set_question_card(conn, qid):
+    """把"当前卡"绑定到某条问题——语音播哪条，屏幕就必须显示哪条。"""
+    set_setting(conn, "card_kind", "question")
+    set_setting(conn, "card_ref", str(qid))
 
 
 def latest_answered(conn, qid=None):
@@ -700,7 +874,15 @@ def card_pages(conn, qid=None, size=None):
         set_setting(conn, "card_kind", "question")
         conn.commit()
 
-    q = latest_answered(conn, qid)
+    # 语音播报和屏幕必须是同一条问题：优先用播报时记下的 card_ref，
+    # 只有没有绑定（或旧库）时才回退到"最新答案"。
+    if qid is not None:
+        q = latest_answered(conn, qid)
+    else:
+        ref = get_setting(conn, "card_ref", "")
+        q = latest_answered(conn, int(ref)) if ref.isdigit() else None
+        if not q:
+            q = latest_answered(conn)
     if not q:
         return None, [], 0
     secs = cardrender.sections(q["answer"] or "")
@@ -717,6 +899,27 @@ def pending_questions(conn, limit=6):
         " ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def open_questions_count(conn):
+    """待家长处理：未答、待补内容、AI 草稿未审核。"""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM questions"
+        " WHERE status IN ('ask','pending','draft')"
+    ).fetchone()["n"]
+
+
+def questions_for_parent(conn, answered_limit=8):
+    """问题罐：可回答项（ask/draft）置顶，最近已答垫底；pending 只走“待补内容”。"""
+    open_rows = conn.execute(
+        "SELECT id,question,answer,status,created,answered FROM questions"
+        " WHERE status IN ('ask','draft') ORDER BY id DESC"
+    ).fetchall()
+    answered_rows = conn.execute(
+        "SELECT id,question,answer,status,created,answered FROM questions"
+        " WHERE status='answered' ORDER BY id DESC LIMIT ?", (answered_limit,)
+    ).fetchall()
+    return [dict(r) for r in list(open_rows) + list(answered_rows)]
 
 
 def auto_push_zika(conn, habit_id):
@@ -919,6 +1122,7 @@ def push_daily_surprise(conn):
         if not take_push(conn, "surprise", "question:%d" % q["id"]):
             return ""
         clear_card_queue(conn)
+        set_question_card(conn, q["id"])
         add_approval(conn, "", "小豆", track=64, kind="question")
         conn.execute("UPDATE questions SET announced=1 WHERE id=?", (q["id"],))
         conn.commit()
@@ -1118,6 +1322,20 @@ def album_data(conn):
     }
 
 
+THEME_JS = """<script>
+(function(){
+  try{var s=localStorage.getItem('coach-theme');
+    if(s==='day'||s==='night'){document.body.classList.remove('day','night');document.body.classList.add(s);}
+  }catch(e){}
+  var b=document.getElementById('themeToggle');
+  if(b){b.addEventListener('click',function(){
+    var n=document.body.classList.contains('day')?'night':'day';
+    document.body.classList.remove('day','night');document.body.classList.add(n);
+    try{localStorage.setItem('coach-theme',n);}catch(e){}
+  });}
+})();
+</script>"""
+
 QUICK_HTML = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>记一个问题</title><style>
@@ -1127,17 +1345,25 @@ body{margin:0;background:#111418;color:#e8edf3;font:16px/1.6 -apple-system,"Ping
 h1{font-size:20px;margin:4px 0 6px}
 .sub{color:#8b97a6;font-size:13px}
 form{margin-top:16px}
-input{width:100%%;font-size:20px;padding:16px;border-radius:14px;border:1px solid #2a313a;
+input{width:100%;font-size:20px;padding:16px;border-radius:14px;border:1px solid #2a313a;
       background:#12171d;color:#e8edf3}
 input:focus{outline:2px solid #ff6b9d}
-button{width:100%%;margin-top:12px;padding:16px;font-size:18px;font-weight:700;
+button{width:100%;margin-top:12px;padding:16px;font-size:18px;font-weight:700;
        border:0;border-radius:14px;background:#ff6b9d;color:#2a0616}
 .hint{color:#8b97a6;font-size:13px;margin-top:10px;line-height:1.7}
 h2{font-size:14px;color:#8b97a6;margin:28px 0 8px;font-weight:normal}
 .item{background:#12171d;border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:14px}
 .item span{color:#8b97a6;font-size:12px;display:block}
 a{color:#ff6b9d}
-</style></head><body><div class="w">
+body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#75604A;--accent:#E76F51;--accent-ink:#2A1A14}
+body.night{--bg:#1B2340;--card:#242E4F;--line:#3A466F;--fg:#FFF4D6;--dim:#9EA9C8;--accent:#FF8A65;--accent-ink:#2A1A14}
+body{background:var(--bg);color:var(--fg)}
+.sub,.hint,h2,.item span{color:var(--dim)}
+input{background:var(--card);color:var(--fg);border-color:var(--line)}
+button{background:var(--accent);color:var(--accent-ink)}
+.item{background:var(--card)}
+a{color:var(--fg)}
+</style></head><body class="{{THEME}}"><div class="w">
 <h1>记一个问题</h1>
 <div class="sub">他说了什么？记下来，回家一起找答案。</div>
 <form method="post" action="/quick">
@@ -1155,13 +1381,14 @@ a{color:#ff6b9d}
   {{PENDING}}<br>
   <a href="/">← 回家长页</a>
 </div>
-</div></body></html>"""
+</div>{{THEME_JS}}</body></html>"""
 
 
 ALBUM_CSS = """
-:root{--ink:#111;--dim:#777;--line:#ddd;--gold:#b8860b}
+body.day{--ink:#3E3228;--dim:#8B735E;--line:#EADAC6;--gold:#E76F51;--bg:#FFF8EC;--card:#FFFDF7}
+body.night{--ink:#FFF4D6;--dim:#9EA9C8;--line:#3A466F;--gold:#FFE8A3;--bg:#1B2340;--card:#242E4F}
 *{box-sizing:border-box}
-body{margin:0;background:#f7f5f0;color:var(--ink);
+body{margin:0;background:var(--bg);color:var(--ink);
      font:16px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
 .wrap{max-width:720px;margin:0 auto;padding:28px 20px 60px}
 h1{font-size:26px;margin:0 0 4px;letter-spacing:1px}
@@ -1172,17 +1399,17 @@ h1{font-size:26px;margin:0 0 4px;letter-spacing:1px}
 .stat span{font-size:12px;color:var(--dim)}
 h2{font-size:17px;margin:34px 0 14px;padding-left:10px;border-left:4px solid var(--gold)}
 .wall{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
-.cell{aspect-ratio:1;border:1px solid var(--line);border-radius:10px;background:#fff;
+.cell{aspect-ratio:1;border:1px solid var(--line);border-radius:10px;background:var(--card);
       display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative}
-.cell.on{border-color:var(--gold);background:#fffdf6}
+.cell.on{border-color:var(--gold);background:var(--card)}
 .cell b{font-size:30px;line-height:1;color:var(--gold)}
 .cell i{font-style:normal;font-size:10px;color:var(--dim);margin-top:4px}
-.cell.off b{color:#ddd}
-.cell.off i{color:#ddd}
+.cell.off b{color:var(--line)}
+.cell.off i{color:var(--line)}
 .cell .rk{position:absolute;top:4px;right:6px;font-size:9px;color:var(--gold)}
 .q{border-left:3px solid var(--line);padding:2px 0 2px 14px;margin-bottom:22px}
 .q .qt{font-size:16px;font-weight:600;margin-bottom:6px}
-.q .qa{white-space:pre-wrap;font-size:14px;color:#333;background:#fff;border-radius:8px;padding:10px 12px}
+.q .qa{white-space:pre-wrap;font-size:14px;color:var(--ink);background:var(--card);border-radius:8px;padding:10px 12px}
 .q .qw{font-size:13px;color:var(--dim)}
 .q .qm{font-size:11px;color:var(--dim);margin-top:4px}
 table.firsts{width:100%;border-collapse:collapse;font-size:14px}
@@ -1191,10 +1418,11 @@ table.firsts td:first-child{color:var(--dim);width:130px}
 .foot{margin-top:44px;padding-top:14px;border-top:1px solid var(--line);
       color:var(--dim);font-size:12px;text-align:center}
 .nav{position:fixed;right:16px;bottom:16px;display:flex;gap:10px}
-.nav a,.nav button{background:#111;color:#fff;border:0;border-radius:999px;
+.nav a,.nav button{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:999px;
       padding:11px 16px;font-size:14px;text-decoration:none;cursor:pointer}
 @media print{
-  body{background:#fff}
+  body, body.day, body.night{background:#FFF8EC;color:#3E3228;
+    --ink:#3E3228;--dim:#75604A;--line:#EADAC6;--gold:#8A5A00;--bg:#FFF8EC;--card:#FFF8EC}
   .nav{display:none}
   .wrap{padding:0;max-width:none}
   h2{page-break-after:avoid}
@@ -1232,7 +1460,7 @@ def render_album(conn):
 
     return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%(child)s 的成长档案</title><style>%(css)s</style></head><body>
+<title>%(child)s 的成长档案</title><style>%(css)s</style></head><body class="%(theme)s">
 <div class="wrap">
   <div class="head">
     <h1>%(child)s 的成长档案</h1>
@@ -1259,7 +1487,8 @@ def render_album(conn):
     它记录的不是成绩，是这一年他问过什么、做到了什么。
   </div>
 </div>
-<div class="nav"><a href="/">回主页</a><button onclick="window.print()">打印</button></div>
+<div class="nav"><a href="/">回主页</a><button id="themeToggle" type="button">白天/夜晚</button><button onclick="window.print()">打印</button></div>
+%(theme_js)s
 </body></html>""" % {
         "child": d["child"], "coach": d["coach"], "start": d["start"],
         "days": d["days"], "learned": d["learned_n"], "total": d["total_chars"],
@@ -1267,6 +1496,7 @@ def render_album(conn):
         "checkins": d["checkins"], "best": d["best"],
         "css": ALBUM_CSS, "firsts": firsts_html,
         "wall": "".join(wall_html), "questions": q_block,
+        "theme": theme_now(), "theme_js": THEME_JS,
     }
 
 
@@ -1343,7 +1573,7 @@ def state_as_text(conn):
     H=brush|刷牙|1|21:10
     H=pack|收书包|1|21:12
     H=read|亲子阅读|0|
-    MSG=12|爸爸妈妈|今天你自己记得刷牙，爸爸看到了，很棒！
+    MSG=<id>|<voice_track>|<from_who>
     END
     """
     s = today_state(conn)
@@ -1358,15 +1588,19 @@ def state_as_text(conn):
         "STREAK=" + str(s["streak"]),
         "DONE=%d/%d" % (s["done_count"], s["total"]),
     ]
-    # 最近一条审核过的问题卡有几页（设备据此进"看卡片"模式）
+    # 当前绑定的卡片有几页（问题卡/识字卡；设备据此进"看卡片"模式）
     _q, _imgs, _n = card_pages(conn)
     lines.append("Q=%d" % _n)
 
     # 近 7 天是否"全部完成"：给设备画 7 个格子（5 岁半看不懂数字，但看得懂格子填满）
-    wk = week_view(conn, 7, set(h["id"] for h in get_habits(conn)))
+    active_ids = set(h["id"] for h in get_habits(conn))
+    wk = week_view(conn, 7, active_ids)
     lines.append("WEEK=" + ",".join(
         "1" if (s["total"] > 0 and d["count"] >= s["total"]) else "0" for d in wk
     ))
+    # 新周弧：本周一到周日 + 今天周几（1=周一）。旧固件忽略这两行。
+    lines.append("WEEK_CAL=" + ",".join(str(x) for x in week_cal(conn, active_ids)))
+    lines.append("WEEKDAY=%d" % datetime.date.today().isoweekday())
 
     for h in s["habits"]:
         mt = habit_meta(h["id"])
@@ -1379,8 +1613,11 @@ def state_as_text(conn):
                 mt["rt"], mt["dt"], mt["h"], mt["m"], mt["seq"], mt["minsec"],
             )
         )
-    for a in s["approvals"]:
+    # 一次只送一条：设备端 say() 会打断上一条，批量下发会让前面的消息永久丢失。
+    # 设备 ack 后，下一次 15 秒同步再取下一条。
+    for a in s["approvals"][:1]:
         lines.append("MSG=%d|%d|%s" % (a["id"], a.get("track", 0), a["from_who"]))
+    lines.append("VOL=%d" % get_volume(conn))
     # 内容包版本：设备据此判断自己的 SD 卡语音是不是最新（将来 OTA 用）
     _pack = conn.execute(
         "SELECT version FROM content_packs WHERE name='voice'").fetchone()
@@ -1397,8 +1634,14 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{CHILD}}的习惯 · 家长端</title>
 <style>
-  :root{--bg:#111418;--card:#1b2027;--line:#2a313a;--fg:#e8edf3;--dim:#8b97a6;
-        --ok:#3ddc97;--warn:#ffb454;--pink:#ff6b9d;--gold:#ffd166;}
+  body.day{--bg:#FFF8EC;--card:#FFFDF7;--line:#EADAC6;--fg:#3E3228;--dim:#75604A;
+        --ok:#2F6F63;--okfill:#5BC8B0;--warn:#E76F51;--pink:#E76F51;--gold:#8A5A00;
+        --panel:#F3E5D3;--input:#FFFDF7;--accent-ink:#2A1A14;
+        --sun:#FFB703;--ray:#FFC93C;--ink:#4A3B32;--cheek:#FF8FA3;--cap:#7C6FD6;}
+  body.night{--bg:#1B2340;--card:#242E4F;--line:#3A466F;--fg:#FFF4D6;--dim:#9EA9C8;
+        --ok:#5BC8B0;--okfill:#5BC8B0;--warn:#FF8A65;--pink:#FF8A65;--gold:#FFE8A3;
+        --panel:#2E3B63;--input:#1B2340;--accent-ink:#2A1A14;
+        --sun:#F4C56A;--ray:#E0AE58;--ink:#4A3B32;--cheek:#FF8FA3;--cap:#7C6FD6;}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
        font:16px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif}
@@ -1411,21 +1654,26 @@ PAGE = """<!doctype html>
   .streak b{font-size:40px;line-height:1;color:var(--warn)}
   .habit{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px dashed var(--line)}
   .habit:last-child{border-bottom:0}
-  .dot{width:26px;height:26px;border-radius:50%;border:2px solid var(--line);
-       display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--dim)}
+  .dot{position:relative;width:26px;height:26px;border-radius:50%;border:2px solid var(--line);
+       display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--dim);
+       padding:0;font-family:inherit;line-height:1;cursor:pointer;background:transparent}
+  .dot:after{content:"";position:absolute;inset:-9px;border-radius:50%}
+  .dot:hover{border-color:var(--ok)}
   .dot.on{background:var(--ok);border-color:var(--ok);color:#06281c;font-weight:700}
+  .dot.on:hover{box-shadow:0 0 0 3px rgba(91,200,176,.25)}
   .name{flex:1}
   .time{color:var(--dim);font-size:13px}
   .week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;text-align:center}
-  .day{background:#141a21;border-radius:10px;padding:8px 0;font-size:12px;color:var(--dim)}
-  .day b{display:block;font-size:18px;color:var(--fg)}
-  .day.full{background:#123a2b;color:#9fe6c6}
-  .day.full b{color:var(--ok)}
+  .weekday{background:var(--panel);border-radius:10px;padding:8px 0;font-size:12px;color:var(--dim)}
+  .weekday b{display:block;font-size:18px;color:var(--fg)}
+  .weekday.full{background:var(--panel);color:var(--ok);border:1px solid var(--ok)}
+  .weekday.full b{color:var(--ok)}
   .review{white-space:pre-wrap;font-size:14px;line-height:1.75;background:#12171d;
           border-radius:10px;padding:12px;border-left:3px solid var(--pink)}
-  .slots{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+  .slots{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px}
   .slot{text-align:left;background:#232a33;color:var(--fg);border:1px solid var(--line);
-        border-radius:12px;padding:9px 10px;font-size:12px;line-height:1.4;cursor:pointer}
+        border-radius:12px;padding:9px 10px;font-size:12px;line-height:1.4;cursor:pointer;
+        flex:0 0 220px;white-space:normal}
   .slot:before{content:attr(data-slot)" · ";color:var(--dim);font-size:12px}
   .slot.on{border-color:var(--pink);background:#2a1a24}
   textarea,input[type=text]{width:100%;background:#12171d;color:var(--fg);border:1px solid var(--line);
@@ -1478,12 +1726,54 @@ PAGE = """<!doctype html>
   .rv button{background:none;border:1px solid var(--line);color:var(--dim);
              border-radius:8px;padding:4px 8px;font-size:12px;cursor:pointer}
   .foot{color:var(--dim);font-size:12px;text-align:center;margin-top:20px}
+  .pnudge{display:flex;justify-content:space-between;align-items:center;
+        background:var(--card);border-left:3px solid var(--pink);border-radius:10px;
+        padding:10px 12px;margin:0 0 14px;color:var(--fg);text-decoration:none;font-size:14px}
+  .pnudge span{color:var(--pink)}
   .albumLink{display:block;background:var(--card);border:1px solid var(--gold);
         border-radius:14px;padding:14px 16px;margin-bottom:14px;color:var(--gold);
         text-decoration:none;font-size:15px}
-</style></head><body><div class="wrap">
-  <h1>{{CHILD}}</h1>
-  <div class="sub">今天 {{DAY}} · {{STAGENAME}} · 每天最多推 {{BUDGET}} 次内容</div>
+  .devstatus{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+        background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:8px 12px;margin:0 0 14px;font-size:13px}
+  .devdot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:0 0 auto}
+  .devstatus.on .devdot{background:var(--ok);box-shadow:0 0 0 3px rgba(61,220,151,.12)}
+  .devmeta{margin-left:auto;color:var(--dim);font-size:12px}
+  .today-head{display:flex;align-items:center;gap:10px;text-align:left;margin:6px 0 8px}
+  .today-head .identity{flex:1;min-width:0;text-align:left}
+  .today-head h1{font-size:22px;line-height:1.1;margin:0;text-align:left;color:var(--fg)}
+  .dateline{color:var(--dim);font-size:12px;margin-top:3px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .now{margin-left:auto;color:var(--dim);font-size:12px;white-space:nowrap}
+  .sunart{width:46px;height:46px;flex:0 0 auto}
+  body.day .review, body.night .review,
+  body.day .msg, body.night .msg,
+  body.day .qa, body.night .qa,
+  body.day textarea, body.night textarea,
+  body.day input[type=text], body.night input[type=text]{background:var(--panel);color:var(--fg)}
+  body.day .slot, body.night .slot,
+  body.day .qbtns button, body.night .qbtns button,
+  body.day .chip, body.night .chip,
+  body.day .mini, body.night .mini{background:var(--panel);color:var(--fg)}
+  body.day .slot.on, body.night .slot.on{background:var(--card);border-color:var(--pink)}
+  body.day .weekday, body.night .weekday{background:var(--panel);color:var(--dim)}
+  body.day .weekday b, body.night .weekday b{color:var(--fg)}
+  body.day .weekday.full, body.night .weekday.full{background:var(--panel);border:1px solid var(--ok);color:var(--ok)}
+  body.day .weekday.full b, body.night .weekday.full b{color:var(--ok)}
+  .dot.on{background:var(--okfill);border-color:var(--okfill);color:#06281c}
+  .send{color:var(--accent-ink)}
+  .albumLink{border-color:var(--gold);color:var(--gold)}
+  .devstatus.on .devdot{background:var(--okfill)}
+</style></head><body class="{{THEME}}"><div class="wrap">
+  <div class="today-head">
+    {{SUN}}
+    <div class="identity">
+      <h1>{{CHILD}}</h1>
+      <div class="dateline">今天 {{DAY_CN}} 周{{WEEKDAY_CN}} · {{STAGENAME}}</div>
+    </div>
+    <div class="now">{{NOW}}</div>
+  </div>
+
+  {{DEVSTATUS}}
 
   {{NOTEBANNER}}
 
@@ -1511,10 +1801,16 @@ PAGE = """<!doctype html>
     <div class="sent">{{SENT}}</div>
   </div>
 
-  <!-- ================= 4. 他的问题（主线：好奇心） ================= -->
-  <details class="card">
-    <summary>他的问题 · 问题罐（{{QCOUNT}} 条）</summary>
-    <div style="margin-top:12px">
+  {{NUDGE}}
+
+  <!-- ================= 更多 ================= -->
+  <a class="albumLink" href="/album">📖 成长档案 · 字卡墙 / 问题册 / 打印 →</a>
+
+  <details class="card" id="more">
+    <summary>更多</summary>
+
+    <div style="margin-top:14px">
+      <div class="sub" style="margin:0 0 8px">他的问题 · 问题罐（{{QCOUNT}} 条）</div>
       <form method="post" action="/parent/question">
         <input type="text" name="question" placeholder="在公园问了什么？比如「为什么树叶会变黄」" maxlength="200">
         <button class="send" type="submit">记下来</button>
@@ -1523,15 +1819,8 @@ PAGE = """<!doctype html>
       <div style="margin-top:6px">{{QUESTIONS}}</div>
       {{CARDS}}
     </div>
-  </details>
 
-  <!-- ================= 更多 ================= -->
-  <a class="albumLink" href="/album">📖 成长档案 · 字卡墙 / 问题册 / 打印 →</a>
-
-  <details class="card">
-    <summary>更多：进度 / 识字 / 设置</summary>
-
-    <div style="margin-top:14px">
+    <div style="margin-top:18px">
       <div class="sub" style="margin:0 0 8px">连续 {{STREAK}} 天 · 最长 {{BEST}} 天（只给你看）</div>
       <div class="sub" style="margin:0 0 8px">最近 7 天</div>
       <div class="week">{{WEEK}}</div>
@@ -1560,6 +1849,9 @@ PAGE = """<!doctype html>
       <div class="sub" style="margin-top:8px">{{STAGENOTE}}</div>
     </form>
 
+    <div class="sub" style="margin:22px 0 8px">今天的记录</div>
+    {{TODAYRECORDS}}
+
     <div class="sub" style="margin:22px 0 8px">这个月开几件事（{{ACTIVECOUNT}}/{{MAXH}}）</div>
     <form method="post" action="/parent/habits">
       {{HABITTOGGLES}}
@@ -1568,6 +1860,14 @@ PAGE = """<!doctype html>
     <div class="sub" style="margin-top:8px">
       建议从 1 件开始，稳定两周再加。最多 {{MAXH}} 件。
     </div>
+
+    <div class="sub" style="margin:22px 0 8px">设备 · 音量</div>
+    <div class="qbtns" style="margin-bottom:10px"><button type="button" id="themeToggle" class="mini">切换白天/夜晚</button></div>
+    <form method="post" action="/parent/volume">
+      <div class="sub" style="margin:0 0 8px">音量 {{VOLUME}}%</div>
+      <input type="range" name="volume" min="0" max="100" value="{{VOLUME}}" style="width:100%">
+      <button class="send" type="submit">保存音量</button>
+    </form>
 
     <form method="post" action="/parent/settings" style="margin-top:20px">
       <div class="sub" style="margin:0 0 8px">名字</div>
@@ -1597,6 +1897,7 @@ PAGE = """<!doctype html>
     });
   });
 </script>
+{{THEME_JS}}
 </body></html>
 """
 
@@ -1624,6 +1925,26 @@ def habit_toggles(conn):
     return "".join(out)
 
 
+def today_records_html(conn):
+    """More → 习惯开关里的今日记录/撤回。"""
+    s = today_state(conn)
+    rows = []
+    for h in s["habits"]:
+        if not h["done"]:
+            continue
+        t = (h["checked_at"] or "")[-8:-3]
+        rows.append(
+            '<div class="habit"><div class="dot on">✓</div>'
+            '<div class="name">%s %s</div><div class="time">%s</div>'
+            '<form method="post" action="/parent/revoke" class="rv" '
+            'onsubmit="return confirm(\'撤回「%s」今天的记录？\')">'
+            '<input type="hidden" name="habit" value="%s">'
+            '<button type="submit">撤回</button></form></div>'
+            % (h["emoji"], h["name"], t, h["name"], h["id"])
+        )
+    return "".join(rows) if rows else '<div class="sub">今天还没有记录。</div>'
+
+
 def render_page(conn, sent=""):
     s = today_state(conn)
     st = stats(conn)
@@ -1635,17 +1956,15 @@ def render_page(conn, sent=""):
         t = (h["checked_at"] or "")[-8:-3] if h["done"] else "还没完成"
         pst = preset_of(h["id"])
         steps = ('<br><span class="stepsm">%s</span>' % pst[8]) if (pst and pst[8]) else ""
-        rv = ""
-        if h["done"]:
-            rv = ('<form method="post" action="/parent/revoke" class="rv" '
-                  'onsubmit="return confirm(\'撤回「%s」今天的记录？\')">'
-                  '<input type="hidden" name="habit" value="%s">'
-                  '<button type="submit">撤回</button></form>'
-                  % (h["name"], h["id"]))
+        tip = "撤回今天的记录" if h["done"] else "标记完成"
+        confirm = (' onsubmit="return confirm(\'撤回「%s」今天的记录？\')"'
+                   % h["name"]) if h["done"] else ""
         habits_html.append(
-            '<div class="habit"><div class="%s">%s</div>'
-            '<div class="name">%s %s%s</div><div class="time">%s</div>%s</div>'
-            % (cls, mark, h["emoji"], h["name"], steps, t, rv)
+            '<form class="habit" method="post" action="/parent/toggle"%s>'
+            '<input type="hidden" name="habit" value="%s">'
+            '<button type="submit" class="%s" title="%s" aria-label="%s">%s</button>'
+            '<div class="name">%s %s%s</div><div class="time">%s</div></form>'
+            % (confirm, h["id"], cls, tip, tip, mark, h["emoji"], h["name"], steps, t)
         )
 
     week_html = []
@@ -1654,7 +1973,7 @@ def render_page(conn, sent=""):
         label = "一二三四五六日"[dd.weekday()]
         full = s["total"] > 0 and d["count"] >= s["total"]
         week_html.append(
-            '<div class="day %s">%s<b>%d</b></div>'
+            '<div class="weekday %s">%s<b>%d</b></div>'
             % ("full" if full else "", label, d["count"])
         )
 
@@ -1683,7 +2002,8 @@ def render_page(conn, sent=""):
         approvals_html = '<div class="sub">还没有，发第一句吧。</div>'
 
     qs_html = []
-    for q in pending_questions(conn, 8):
+    parent_questions = questions_for_parent(conn)
+    for q in parent_questions:
         ans = q["answer"].strip()
         if ans:
             body = '<div class="qa">%s</div>' % ans.replace("<", "&lt;")
@@ -1743,8 +2063,11 @@ def render_page(conn, sent=""):
                          push_count_today(conn, "newchar"),
                          push_count_today(conn, "surprise")))
 
-    q_count = conn.execute(
-        "SELECT COUNT(*) AS n FROM questions WHERE status!='pending'").fetchone()["n"]
+    q_count = len(parent_questions)
+    nudge_count = open_questions_count(conn)
+    nudge_html = ('<a class="pnudge" href="#more" '
+                  'onclick="document.getElementById(\'more\').open=true">%d 个问题等你处理 '
+                  '<span>→</span></a>' % nudge_count) if nudge_count else ""
 
     # 孩子在设备上按了"有件事想告诉爸妈"
     _notes = unseen_notes(conn)
@@ -1841,10 +2164,21 @@ def render_page(conn, sent=""):
         cards_html = '<div class="qwait" style="margin-top:10px">写一条答案后，这里会预览设备上的问题卡。</div>'
 
     page = PAGE
+    theme = theme_now()
+    d = datetime.date.fromisoformat(s["day"])
+    day_cn = "%d月%d日" % (d.month, d.day)
+    weekday_cn = "一二三四五六日"[d.weekday()]
+    now = datetime.datetime.now().strftime("%H:%M")
     for k, v in {
         "{{CHILD}}": s["child_name"],
         "{{COACH}}": s["coach_name"],
         "{{DAY}}": s["day"],
+        "{{THEME}}": theme,
+        "{{SUN}}": sun_svg(theme),
+        "{{DAY_CN}}": day_cn,
+        "{{WEEKDAY_CN}}": weekday_cn,
+        "{{NOW}}": now,
+        "{{DEVSTATUS}}": device_status_html(conn),
         "{{STREAK}}": str(st["streak"]),
         "{{BEST}}": str(st["best"]),
         "{{DONE}}": str(s["done_count"]),
@@ -1855,6 +2189,9 @@ def render_page(conn, sent=""):
         "{{SLOTS}}": slots_html,
         "{{APPROVALS}}": approvals_html,
         "{{HABITTOGGLES}}": habit_toggles(conn),
+        "{{TODAYRECORDS}}": today_records_html(conn),
+        "{{VOLUME}}": str(get_volume(conn)),
+        "{{THEME_JS}}": THEME_JS,
         "{{ACTIVECOUNT}}": str(s["total"]),
         "{{MAXH}}": str(max_habits(conn)),
         "{{STAGENAME}}": cfg["name"],
@@ -1862,6 +2199,7 @@ def render_page(conn, sent=""):
         "{{STAGEBTNS}}": stage_btns,
         "{{BUDGET}}": str(cfg["content_budget"]),
         "{{QUESTIONS}}": questions_html,
+        "{{NUDGE}}": nudge_html,
         "{{CARDS}}": cards_html,
         "{{ZIKA}}": zika_html,
         "{{SURPRISE}}": surprise_html,
@@ -1922,7 +2260,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/") and not token_ok(q, self.headers):
                 return self._send(401, "bad token", "text/plain")
             if path.startswith("/api/"):
-                touch_device(conn, device_id_of(q))
+                touch_device(conn, device_id_of(q), self.client_address[0], rssi_of(q))
             if path in ("/", "/index.html"):
                 code = (q.get("sent") or [""])[0]
                 sent = {
@@ -1934,6 +2272,9 @@ class Handler(BaseHTTPRequestHandler):
                     "stagenone": "⚠️ 未知阶段。",
                     "hab0": "⚠️ 至少要开 1 件。",
                     "revoked": "↩️ 已撤回该记录（只在家长页留痕，设备端不会提示孩子）",
+                    "checked": "✅ 已补记完成（和他在设备上打卡一样）",
+                    "haberr": "⚠️ 这个习惯没开启，没能记录。",
+                    "volsaved": "✅ 音量已保存，设备下次同步会应用。",
                     "qadd": "✅ 记下了。回家再一起找答案——别在路上就给答案，先问问他怎么想。",
                     "qfill": "✅ 问题补上了，现在可以让 AI 起草答案。",
                     "nseen": "✅ 已标记为已读。",
@@ -1967,7 +2308,8 @@ class Handler(BaseHTTPRequestHandler):
                 n_pending = len(pending_questions_to_fill(conn))
                 pend = ("设备上记了 %d 个还没补内容 → <a href='/#q'>去补</a>" % n_pending) if n_pending else ""
                 return self._send(200,
-                    QUICK_HTML.replace("{{RECENT}}", recent).replace("{{PENDING}}", pend),
+                    QUICK_HTML.replace("{{RECENT}}", recent).replace("{{PENDING}}", pend)
+                    .replace("{{THEME}}", theme_now()).replace("{{THEME_JS}}", THEME_JS),
                     "text/html; charset=utf-8")
 
             if path == "/album":
@@ -2019,7 +2361,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/") and not token_ok(q, self.headers):
                 return self._send(401, "bad token", "text/plain")
             if path.startswith("/api/"):
-                touch_device(conn, device_id_of(q))
+                touch_device(conn, device_id_of(q), self.client_address[0], rssi_of(q))
             # 极简记录页的提交（也是家长最常用的入口）
             if path == "/quick":
                 form = self._form()
@@ -2123,9 +2465,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(303, "", headers={"Location": "/?sent=zika"})
 
             if path == "/parent/push_card":
-                q, imgs, n = card_pages(conn)
-                if not imgs:
+                # 推"预览里正在显示的那张问题卡"；如果当前是识字卡，则退回最新答案。
+                q, imgs, _n = card_pages(conn)
+                if not imgs or get_setting(conn, "card_kind", "question") != "question":
+                    q = latest_answered(conn)
+                if not q:
                     return self._send(303, "", headers={"Location": "/?sent=qnon"})
+                set_question_card(conn, q["id"])
                 clear_card_queue(conn)
                 add_approval(conn, "", "小豆", track=64, kind="question")
                 conn.commit()
@@ -2167,6 +2513,24 @@ class Handler(BaseHTTPRequestHandler):
                 answer_question(conn, qid, txt, announce=True)
                 return self._send(303, "", headers={"Location": "/?sent=qans"})
 
+            if path == "/parent/toggle":
+                form = self._form()
+                hid = (form.get("habit") or [""])[0]
+                day = today_str()
+                done = conn.execute(
+                    "SELECT 1 FROM checkins WHERE habit_id=? AND day=?", (hid, day)
+                ).fetchone()
+                if done:
+                    conn.execute("DELETE FROM checkins WHERE habit_id=? AND day=?", (hid, day))
+                    conn.execute("INSERT INTO events(kind,detail,ts) VALUES('revoke',?,?)",
+                                 ("%s@%s" % (hid, day), now_iso()))
+                    conn.commit()
+                    return self._send(303, "", headers={"Location": "/?sent=revoked"})
+                ok, _msg = check_in(conn, hid, "parent")
+                if not ok:
+                    return self._send(303, "", headers={"Location": "/?sent=haberr"})
+                return self._send(303, "", headers={"Location": "/?sent=checked"})
+
             if path == "/parent/revoke":
                 form = self._form()
                 hid = (form.get("habit") or [""])[0]
@@ -2176,6 +2540,13 @@ class Handler(BaseHTTPRequestHandler):
                              ("%s@%s" % (hid, day), now_iso()))
                 conn.commit()
                 return self._send(303, "", headers={"Location": "/?sent=revoked"})
+
+            if path == "/parent/volume":
+                form = self._form()
+                v = max(0, min(100, self._int(form.get("volume"))))
+                set_setting(conn, "volume", str(v))
+                conn.commit()
+                return self._send(303, "", headers={"Location": "/?sent=volsaved"})
 
             if path == "/parent/settings":
                 form = self._form()
